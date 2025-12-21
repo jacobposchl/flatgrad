@@ -160,6 +160,7 @@ def test_and_plot_derivatives():
     
     # Compute derivatives (1st through 5th order)
     max_order = 5
+    
     derivatives = compute_directional_derivatives(
         model=model,
         inputs=inputs,
