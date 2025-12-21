@@ -31,7 +31,7 @@ def test_and_plot_derivative_ratios():
     decay_factor = 0.5  # Each order is roughly half the previous - this creates d_n ≈ base * (0.5)^(n-1)
     noise_level = 0.1  # 10% multiplicative noise for realism
     
-    # Generate base values ONCE for all orders (each sample gets its own base)
+    # Generate base values for all orders (each sample gets its own base)
     base = torch.rand(batch_size, device=device) * 0.1 + 0.05  # Random base values
     
     for order in range(1, n_orders + 1):
@@ -102,9 +102,22 @@ def test_and_plot_derivative_ratios():
     print(f"  Saved plot to: {output_path}")
     plt.close()
     
-    print(f"  Computed ratios shape: {ratios.shape}")
-    print(f"  Mean ratio (should be ~{decay_factor:.2f} for synthetic data with decay_factor={decay_factor}): {ratios_np.mean():.4f}")
-    print(f"  Std ratio: {ratios_np.std():.4f}\n")
+    print(f"\n  === Ratio Statistics ===")
+    print(f"  Computed ratios shape: {ratios.shape} [batch_size={batch_size}, n_ratios={n_ratios}]")
+    print(f"  Mean ratio across all samples and ratio indices: {ratios_np.mean():.4f} (expected: ~{decay_factor:.2f})")
+    print(f"  Std ratio: {ratios_np.std():.4f}")
+    print(f"  Min ratio: {ratios_np.min():.4f}")
+    print(f"  Max ratio: {ratios_np.max():.4f}")
+    print(f"  Median ratio: {np.median(ratios_np):.4f}")
+    
+    # Per-ratio-index statistics
+    print(f"\n  === Statistics by Ratio Index ===")
+    for idx in range(n_ratios):
+        ratio_idx_values = ratios_np[:, idx]
+        print(f"    Ratio {idx+1} (d_{idx+2}/d_{idx+1}): mean={ratio_idx_values.mean():.4f}, std={ratio_idx_values.std():.4f}, "
+              f"range=[{ratio_idx_values.min():.4f}, {ratio_idx_values.max():.4f}]")
+    
+    print()
 
 
 def compute_lambda_per_sample(derivatives, abs_derivatives=True, min_first_derivative=1e-8):
@@ -206,6 +219,15 @@ def test_and_plot_lambda_estimation():
     for i in range(batch_size):
         if lambda_per_sample[i] is not None:
             deriv_values = [d[i] for d in derivatives_np]
+            
+            # Check for identical or very similar consecutive values (which create flat segments)
+            for j in range(len(deriv_values) - 1):
+                diff = abs(deriv_values[j] - deriv_values[j+1])
+                rel_diff = diff / (abs(deriv_values[j]) + 1e-12) if abs(deriv_values[j]) > 1e-12 else float('inf')
+                if diff < 1e-10 or rel_diff < 1e-6:
+                    print(f"  Note: Dir {i+1} has very similar values at orders {orders[j]} and {orders[j+1]}: "
+                          f"{deriv_values[j]:.2e} vs {deriv_values[j+1]:.2e} (diff: {diff:.2e})")
+            
             ax1.plot(orders, deriv_values, marker='o', label=f'Dir {i+1} (λ={lambda_per_sample[i]:.3f})', 
                     alpha=0.7, linewidth=2)
     
@@ -214,7 +236,7 @@ def test_and_plot_lambda_estimation():
     ax1.set_title(f'Directional Derivatives by Order\n(Each line = one direction, λ shown in legend)')
     ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
     ax1.grid(True, alpha=0.3)
-    ax1.set_yscale('log')
+    ax1.set_yscale('symlog')
     
     # Plot 2: Lambda values for each direction, plus overall average
     ax2 = axes[1]
@@ -244,12 +266,197 @@ def test_and_plot_lambda_estimation():
     print(f"  Saved plot to: {output_path}")
     plt.close()
     
-    print(f"  Computed {len(valid_lambdas)} valid lambda values")
+    print(f"\n  === Lambda Statistics ===")
+    print(f"  Valid lambda values computed: {len(valid_lambdas)}/{batch_size}")
     if valid_lambdas:
         print(f"  Lambda range: [{min(valid_lambdas):.4f}, {max(valid_lambdas):.4f}]")
         print(f"  Mean lambda: {np.mean(valid_lambdas):.4f}")
+        print(f"  Std lambda: {np.std(valid_lambdas):.4f}")
+        print(f"  Median lambda: {np.median(valid_lambdas):.4f}")
+        print(f"  25th percentile: {np.percentile(valid_lambdas, 25):.4f}")
+        print(f"  75th percentile: {np.percentile(valid_lambdas, 75):.4f}")
     if overall_lambda is not None:
-        print(f"  Overall averaged lambda: {overall_lambda:.4f}")
+        print(f"  Overall averaged lambda (from estimate_lambda_from_derivatives): {overall_lambda:.4f}")
+    
+    print(f"\n  === Per-Direction Lambda Values ===")
+    for i, lambda_val in enumerate(lambda_per_sample):
+        if lambda_val is not None:
+            print(f"    Dir {i+1}: λ = {lambda_val:.4f}")
+        else:
+            print(f"    Dir {i+1}: λ = None (invalid/filtered out)")
+    
+    print(f"\n  === Derivative Magnitude Statistics ===")
+    for order_idx, deriv_tensor in enumerate(derivatives, 1):
+        deriv_abs = deriv_tensor.abs()
+        mean_mag = deriv_abs.mean().item()
+        std_mag = deriv_abs.std().item()
+        min_mag = deriv_abs.min().item()
+        max_mag = deriv_abs.max().item()
+        print(f"    Order {order_idx}: mean={mean_mag:.2e}, std={std_mag:.2e}, "
+              f"min={min_mag:.2e}, max={max_mag:.2e}")
+    print()
+
+
+def test_and_plot_high_curvature_lambda():
+    """
+    Test lambda estimation on a high-curvature loss surface.
+    High-curvature surfaces should have non-zero higher-order derivatives.
+    
+    Strategy:
+    - Use an untrained model (random initialization = high curvature)
+    - Use inputs near decision boundaries (higher curvature regions)
+    - Use activations that preserve more curvature (tanh instead of ReLU)
+    """
+    print("Testing lambda estimation on high-curvature surface...")
+    device = torch.device('cpu')
+    
+    # Create a deeper, more complex model with tanh (smooth, preserves curvature)
+    # Tanh is smooth everywhere, unlike ReLU which has zero gradients in some regions
+    model = nn.Sequential(
+        nn.Linear(10, 64),
+        nn.Tanh(),
+        nn.Linear(64, 64),
+        nn.Tanh(),
+        nn.Linear(64, 10)
+    ).to(device)
+    
+    # Use untrained model (random weights) = higher curvature
+    # Also use larger inputs to create more dramatic loss values
+    batch_size = 8
+    inputs = torch.randn(batch_size, 10, device=device) * 2.0  # Larger variance
+    labels = torch.randint(0, 10, (batch_size,), device=device)
+    
+    # Sample directions
+    directions = sample_unit_directions(batch_size=batch_size, input_shape=(10,), device=device)
+    
+    # Compute derivatives
+    def loss_fn(logits, labels, reduction='none'):
+        return F.cross_entropy(logits, labels, reduction=reduction)
+    
+    max_order = 5  # Go to 5th order to see if higher orders remain non-zero
+    derivatives = compute_directional_derivatives(
+        model=model,
+        inputs=inputs,
+        labels=labels,
+        directions=directions,
+        loss_fn=loss_fn,
+        min_order=1,
+        max_order=max_order,
+        create_graph=True
+    )
+    
+    # Compute lambda per sample for visualization
+    lambda_per_sample = compute_lambda_per_sample(derivatives, abs_derivatives=True)
+    valid_lambdas = [l for l in lambda_per_sample if l is not None]
+    
+    # Compute overall lambda
+    overall_lambda = estimate_lambda_from_derivatives(derivatives, abs_derivatives=True)
+    
+    # Convert to numpy for plotting
+    derivatives_np = [d.detach().cpu().numpy() for d in derivatives]
+    orders = list(range(1, max_order + 1))
+    
+    # Create visualization
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # Plot 1: Derivatives across orders - should show less rapid decay
+    ax1 = axes[0]
+    for i in range(batch_size):
+        if lambda_per_sample[i] is not None:
+            deriv_values = [d[i] for d in derivatives_np]
+            
+            # Check for very small values (near-zero)
+            for j, val in enumerate(deriv_values):
+                if abs(val) < 1e-8:
+                    print(f"  Note: Dir {i+1} has near-zero value at order {orders[j]}: {val:.2e}")
+            
+            ax1.plot(orders, deriv_values, marker='o', label=f'Dir {i+1} (λ={lambda_per_sample[i]:.3f})', 
+                    alpha=0.7, linewidth=2)
+    
+    ax1.set_xlabel('Derivative Order')
+    ax1.set_ylabel('|Derivative Value|')
+    ax1.set_title(f'High-Curvature Surface: Derivatives by Order\n(Should show non-zero higher-order derivatives)')
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_yscale('symlog')
+    
+    # Plot 2: Lambda values for each direction, plus overall average
+    ax2 = axes[1]
+    valid_indices = [i for i, l in enumerate(lambda_per_sample) if l is not None]
+    lambda_values_plot = [lambda_per_sample[i] for i in valid_indices]
+    
+    # Bar chart of individual lambdas
+    bars = ax2.bar(range(len(valid_indices)), lambda_values_plot, alpha=0.7, 
+                   edgecolor='black', label='Per-direction λ')
+    
+    # Add horizontal line for overall average
+    if overall_lambda is not None:
+        ax2.axhline(y=overall_lambda, color='r', linestyle='--', linewidth=2, 
+                   label=f'Average λ = {overall_lambda:.3f}')
+    
+    ax2.set_xlabel('Direction Index')
+    ax2.set_ylabel('λ Value')
+    ax2.set_title('Lambda Values by Direction (High-Curvature)\n(Red dashed line = overall average)')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis='y')
+    ax2.set_xticks(range(len(valid_indices)))
+    ax2.set_xticklabels([f'Dir {i+1}' for i in valid_indices])
+    
+    plt.tight_layout()
+    output_path = OUTPUT_DIR / "lambda_estimation_high_curvature.png"
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"  Saved plot to: {output_path}")
+    plt.close()
+    
+    print(f"\n  === Lambda Statistics (High-Curvature Surface) ===")
+    print(f"  Valid lambda values computed: {len(valid_lambdas)}/{batch_size}")
+    if valid_lambdas:
+        print(f"  Lambda range: [{min(valid_lambdas):.4f}, {max(valid_lambdas):.4f}]")
+        print(f"  Mean lambda: {np.mean(valid_lambdas):.4f}")
+        print(f"  Std lambda: {np.std(valid_lambdas):.4f}")
+        print(f"  Median lambda: {np.median(valid_lambdas):.4f}")
+        print(f"  25th percentile: {np.percentile(valid_lambdas, 25):.4f}")
+        print(f"  75th percentile: {np.percentile(valid_lambdas, 75):.4f}")
+        
+        # Count positive vs negative lambdas
+        positive_count = sum(1 for l in valid_lambdas if l > 0)
+        negative_count = sum(1 for l in valid_lambdas if l < 0)
+        print(f"  Positive lambdas: {positive_count}/{len(valid_lambdas)} "
+              f"(indicates non-decaying or increasing derivatives)")
+        print(f"  Negative lambdas: {negative_count}/{len(valid_lambdas)} "
+              f"(indicates decaying derivatives)")
+    if overall_lambda is not None:
+        print(f"  Overall averaged lambda (from estimate_lambda_from_derivatives): {overall_lambda:.4f}")
+    
+    print(f"\n  === Per-Direction Lambda Values ===")
+    for i, lambda_val in enumerate(lambda_per_sample):
+        if lambda_val is not None:
+            print(f"    Dir {i+1}: λ = {lambda_val:.4f}")
+        else:
+            print(f"    Dir {i+1}: λ = None (invalid/filtered out)")
+    
+    # Check if higher-order derivatives are significant
+    print(f"\n  === Higher-Order Derivative Magnitude Statistics ===")
+    print(f"  (Non-zero higher-order derivatives indicate persistent curvature)")
+    for order_idx, deriv_tensor in enumerate(derivatives, 1):
+        deriv_abs = deriv_tensor.abs()
+        mean_mag = deriv_abs.mean().item()
+        std_mag = deriv_abs.std().item()
+        min_mag = deriv_abs.min().item()
+        max_mag = deriv_abs.max().item()
+        median_mag = deriv_abs.median().item()
+        non_zero_count = (deriv_abs > 1e-8).sum().item()
+        print(f"    Order {order_idx}: mean={mean_mag:.2e}, std={std_mag:.2e}, "
+              f"median={median_mag:.2e}, min={min_mag:.2e}, max={max_mag:.2e}, "
+              f"non-zero samples={non_zero_count}/{batch_size}")
+    
+    # Compare decay rates between orders
+    print(f"\n  === Decay Rate Analysis ===")
+    deriv_means = [d.abs().mean().item() for d in derivatives]
+    for i in range(len(deriv_means) - 1):
+        decay_ratio = deriv_means[i+1] / (deriv_means[i] + 1e-12)
+        print(f"    Mean decay from order {i+1} to {i+2}: {decay_ratio:.4f} "
+              f"(values closer to 1.0 = less decay)")
     print()
 
 
@@ -261,3 +468,4 @@ if __name__ == "__main__":
     
     test_and_plot_derivative_ratios()
     test_and_plot_lambda_estimation()
+    test_and_plot_high_curvature_lambda()
