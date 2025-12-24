@@ -238,22 +238,21 @@ class SimpleMLP(nn.Module):
 
 class ExponentialDecayModel(nn.Module):
     """
-    Model designed to produce exponential decay in derivatives: d_n ~ (decay_factor)^n
+    Model with exponentially decaying derivative magnitudes.
     
     Analytical Properties:
-    - Known lambda: λ = log(decay_factor)
-    - Known analytic radius: R ≈ 1 / decay_factor
-    - Derivatives follow exact exponential pattern: d_n = base * (decay_factor)^n
-    
-    Implementation uses a composition of linear layers with carefully chosen weights
-    to produce the desired decay pattern.
+    - Uses exp(w·x) which produces true exponential decay in directional derivatives
+    - For f(x) = exp(w·x), directional derivatives are: D^n f = (w·u)^n * exp(w·x)
+    - When combined with MSE loss, derivatives decay approximately exponentially
+    - lambda ≈ log(|w·u|) where w is the weight vector and u is the direction
+    - R ≈ 1 / |w·u|
     
     Args:
         input_dim: Input dimension
         output_dim: Output dimension (default: 1)
-        decay_factor: Factor by which derivatives decay per order (default: 0.5)
-                     Should be in (0, 1) for decay
-        base_scale: Base scale for first derivative (default: 1.0)
+        decay_factor: Target decay rate for derivatives (default: 0.5)
+                     This sets |w| such that derivatives decay by this factor
+        base_scale: Base scale for output (default: 1.0)
     """
     
     def __init__(
@@ -279,24 +278,25 @@ class ExponentialDecayModel(nn.Module):
         self.analytical_lambda = math.log(decay_factor)
         self.analytical_radius = 1.0 / decay_factor
         
-        # Create layers that produce exponential decay pattern
-        # Use a simple structure: linear -> activation -> linear
-        # The activation and weights are chosen to approximate exponential decay
-        hidden_dim = max(32, input_dim // 2)
+        # Fixed weight vector - the magnitude controls the decay rate
+        # For exp(w·x), directional derivative D^n[exp(w·x)] = (w·u)^n * exp(w·x)
+        # We want |w·u| ≈ decay_factor on average, so we scale w accordingly
+        # Setting |w| = decay_factor * sqrt(input_dim) makes |w·u| ≈ decay_factor for unit u
+        weights = torch.randn(output_dim, input_dim)
+        weights = weights / (weights.norm(dim=1, keepdim=True) + 1e-8)
+        weights = weights * decay_factor * math.sqrt(input_dim)
+        # Use Parameter so gradients flow, but we won't train it
+        self.weights = nn.Parameter(weights, requires_grad=False)
         
-        self.layer1 = nn.Linear(input_dim, hidden_dim)
-        self.activation = nn.Tanh()  # Smooth activation
-        self.layer2 = nn.Linear(hidden_dim, output_dim)
-        
-        # Initialize weights to produce desired decay pattern
-        # This is approximate - the actual pattern depends on input/direction
-        with torch.no_grad():
-            self.layer1.weight.data *= base_scale
-            self.layer2.weight.data *= decay_factor
+        # Bias and scale
+        self.bias = nn.Parameter(torch.zeros(output_dim))
+        self.scale = nn.Parameter(torch.ones(output_dim) * base_scale)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass.
+        Forward pass: output = scale * exp(weights·x + bias)
+        
+        The exponential ensures true exponential behavior in derivatives.
         
         Args:
             x: Input tensor [B, ...] - any shape, will be flattened
@@ -313,10 +313,15 @@ class ExponentialDecayModel(nn.Module):
                 f"model input_dim {self.input_dim}"
             )
         
-        x = self.layer1(x_flat)
-        x = self.activation(x)
-        x = self.layer2(x)
-        return x
+        # Compute linear transformation: w·x + b
+        z = torch.matmul(x_flat, self.weights.T) + self.bias  # [B, output_dim]
+        
+        # Apply exponential with scaling
+        # Clamp to avoid numerical overflow
+        z = torch.clamp(z, min=-10, max=10)
+        output = self.scale * torch.exp(z)
+        
+        return output
 
 
 class SinusoidalModel(nn.Module):
@@ -329,6 +334,13 @@ class SinusoidalModel(nn.Module):
     - Periodicity depends on frequency parameter
     
     The model uses sin/cos functions to create oscillatory behavior.
+    The key is to compute f(x) = sin(w·x) where w is a fixed weight vector.
+    Then directional derivatives D^n[f](x; u) will follow the pattern:
+    D^1 = w·u * cos(w·x)
+    D^2 = -(w·u)^2 * sin(w·x)
+    D^3 = -(w·u)^3 * cos(w·x)
+    D^4 = (w·u)^4 * sin(w·x)
+    showing a 4-cycle in the sin/cos pattern.
     
     Args:
         input_dim: Input dimension
@@ -357,16 +369,23 @@ class SinusoidalModel(nn.Module):
         self.frequency = frequency
         self.amplitude = amplitude
         
-        # Linear layer to map input to sin/cos arguments
-        self.linear = nn.Linear(input_dim, output_dim)
+        # Fixed weight vector for each output dimension
+        # Normalize to unit length for stable cyclic patterns, then scale by frequency
+        # Use Parameter(requires_grad=False) instead of buffer for gradient flow
+        weights = torch.randn(output_dim, input_dim)
+        weights = weights / (weights.norm(dim=1, keepdim=True) + 1e-8)  # Unit normalize
+        weights = weights * frequency * math.sqrt(input_dim)  # Scale appropriately
+        self.weights = nn.Parameter(weights, requires_grad=False)
         
-        # Scale factors for sin/cos components
-        self.sin_scale = nn.Parameter(torch.ones(output_dim) * amplitude)
-        self.cos_scale = nn.Parameter(torch.ones(output_dim) * amplitude)
+        # Bias and scale
+        self.bias = nn.Parameter(torch.zeros(output_dim))
+        self.scale = nn.Parameter(torch.ones(output_dim) * amplitude)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass: output = sin_scale * sin(freq * linear(x)) + cos_scale * cos(freq * linear(x))
+        Forward pass: output = scale * sin(weights·x + bias)
+        
+        Using sin ensures cyclic pattern in directional derivatives.
         
         Args:
             x: Input tensor [B, ...] - any shape, will be flattened
@@ -383,14 +402,13 @@ class SinusoidalModel(nn.Module):
                 f"model input_dim {self.input_dim}"
             )
         
-        # Compute linear transformation
-        z = self.linear(x_flat)  # [B, output_dim]
+        # Compute linear transformation: w·x
+        z = torch.matmul(x_flat, self.weights.T) + self.bias  # [B, output_dim]
         
-        # Apply sin/cos with frequency
-        sin_component = self.sin_scale * torch.sin(self.frequency * z)
-        cos_component = self.cos_scale * torch.cos(self.frequency * z)
+        # Apply sin with scaling
+        output = self.scale * torch.sin(z)
         
-        return sin_component + cos_component
+        return output
 
 
 class LinearCombinationModel(nn.Module):

@@ -305,7 +305,7 @@ def compute_analytic_radius(
             # Handle edge cases
             if not np.isfinite(R_estimate) or R_estimate <= 0:
                 R_values.append(np.nan)
-                R_confidences.append(np.nan)
+                R_confidences.append((np.nan, np.nan))
             else:
                 R_values.append(R_estimate)
                 # Use confidence interval for slope to compute CI for R
@@ -315,7 +315,7 @@ def compute_analytic_radius(
                 
         except (ValueError, RuntimeError):
             R_values.append(np.nan)
-            R_confidences.append(np.nan)
+            R_confidences.append((np.nan, np.nan))
     
     # Return format depends on batch size
     R_values = np.array(R_values)
@@ -323,7 +323,8 @@ def compute_analytic_radius(
     if batch_size == 1:
         return float(R_values[0]) if np.isfinite(R_values[0]) else None
     else:
-        R_conf_array = np.array(R_confidences)
+        # Convert list of tuples to 2D array [batch_size, 2]
+        R_conf_array = np.array([(lower, upper) for lower, upper in R_confidences])
         return R_values, R_conf_array
 
 

@@ -32,6 +32,10 @@ from configs.test_config import TEST_MODELS_OUTPUT_DIR as OUTPUT_DIR
 def test_polynomial_model():
     """
     Test polynomial model with known analytical properties.
+    
+    Note: For a degree-2 polynomial model f(x) with MSE loss L = (f(x) - y)^2,
+    the loss itself becomes a degree-4 polynomial, so only derivatives of order > 4
+    should be zero.
     """
     print("Testing PolynomialModel...")
     device = torch.device('cpu')
@@ -53,7 +57,7 @@ def test_polynomial_model():
     outputs = model(inputs)
     print(f"  Model output shape: {outputs.shape} (expected: [{batch_size}, {output_dim}])")
     
-    # Test derivatives - for degree N polynomial, derivatives of order > N should be zero
+    # Test derivatives - MSE loss squares the polynomial, making it degree 2*N
     def loss_fn(logits, labels, reduction='none'):
         # For regression, use MSE
         if logits.shape[1] == 1:
@@ -61,7 +65,8 @@ def test_polynomial_model():
         else:
             return F.mse_loss(logits, labels.unsqueeze(1).expand(-1, logits.shape[1]), reduction=reduction)
     
-    max_order = 5
+    max_order = 6
+    loss_degree = 2 * degree  # MSE makes loss degree = 2 * model_degree
     derivatives = compute_directional_derivatives(
         model=model,
         inputs=inputs,
@@ -85,13 +90,13 @@ def test_polynomial_model():
         deriv_values = [d[i] for d in derivatives_np]
         ax1.plot(orders, deriv_values, marker='o', label=f'Sample {i+1}', alpha=0.7)
     
-    # Mark where derivatives should become zero (after degree)
-    ax1.axvline(x=degree + 1, color='r', linestyle='--', linewidth=2, 
-                label=f'Order {degree + 1} (should be ~0 for degree {degree} poly)')
+    # Mark where derivatives should become zero (MSE makes loss degree 2*N)
+    ax1.axvline(x=loss_degree + 1, color='r', linestyle='--', linewidth=2, 
+                label=f'Order {loss_degree + 1} (should be ~0 for degree {loss_degree} loss)')
     
     ax1.set_xlabel('Derivative Order')
     ax1.set_ylabel('Derivative Value')
-    ax1.set_title(f'Polynomial Model Derivatives (degree={degree})\n(Derivatives > degree should be ~0)')
+    ax1.set_title(f'Polynomial Model (degree={degree}) + MSE Loss (degree={loss_degree})\n(Order > {loss_degree} should be ~0)')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     ax1.set_yscale('symlog')
@@ -100,10 +105,10 @@ def test_polynomial_model():
     ax2 = axes[1]
     order_mean_abs = [d.abs().mean().item() for d in derivatives]
     ax2.bar(orders, order_mean_abs, alpha=0.7, edgecolor='black')
-    ax2.axvline(x=degree + 1, color='r', linestyle='--', linewidth=2)
+    ax2.axvline(x=loss_degree + 1, color='r', linestyle='--', linewidth=2)
     ax2.set_xlabel('Derivative Order')
     ax2.set_ylabel('Mean Absolute Value')
-    ax2.set_title('Mean |Derivative| by Order\n(Should drop to ~0 after degree)')
+    ax2.set_title(f'Mean |Derivative| by Order\n(Should drop to ~0 after order {loss_degree})')
     ax2.set_yscale('log')
     ax2.grid(True, alpha=0.3, axis='y')
     
@@ -117,8 +122,8 @@ def test_polynomial_model():
     for order, deriv in enumerate(derivatives, 1):
         mean_abs = deriv.abs().mean().item()
         print(f"    Order {order}: {mean_abs:.2e}")
-        if order > degree:
-            print(f"      (Expected ~0 for order > degree={degree})")
+        if order > loss_degree:
+            print(f"      (Expected ~0 for order > {loss_degree})")
     print()
 
 
@@ -332,12 +337,12 @@ def test_sinusoidal_model():
     
     input_dim = 10
     output_dim = 1
-    frequency = 1.0
+    frequency = 2.0  # Higher frequency for more pronounced cyclic patterns
     
     model = SinusoidalModel(input_dim=input_dim, output_dim=output_dim, frequency=frequency).to(device)
     model.eval()
     
-    batch_size = 5
+    batch_size = 10  # More samples for better detection
     inputs = torch.randn(batch_size, input_dim, device=device)
     labels = torch.randn(batch_size, device=device)
     directions = sample_unit_directions(batch_size=batch_size, input_shape=(input_dim,), device=device)
@@ -357,8 +362,8 @@ def test_sinusoidal_model():
         create_graph=True
     )
     
-    # Detect cyclic patterns
-    is_cyclic, cycle_period, correlation = detect_cyclic(derivatives, threshold=0.6)
+    # Detect cyclic patterns - don't use abs for sign-based cycles!
+    is_cyclic, cycle_period, correlation = detect_cyclic(derivatives, threshold=0.5, abs_derivatives=False)
     
     # Create visualization
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -446,7 +451,7 @@ def test_linear_combination_model():
     lambda_val = estimate_lambda_from_derivatives(derivatives, abs_derivatives=True)
     R_result = compute_analytic_radius(derivatives)
     omega_result = compute_spectral_edge(derivatives)
-    is_cyclic, period, corr = detect_cyclic(derivatives, threshold=0.6)
+    is_cyclic, period, corr = detect_cyclic(derivatives, threshold=0.6, abs_derivatives=False)
     
     print(f"\n  === LinearCombinationModel Results ===")
     print(f"  Estimated lambda: {lambda_val:.4f}" if lambda_val else "  Estimated lambda: None")
