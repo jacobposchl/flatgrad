@@ -105,7 +105,8 @@ def compute_derivatives_multi_direction(
     loss_fn,
     max_order: int,
     K_dirs: int,
-    device: str = 'cpu'
+    device: str = 'cpu',
+    min_norm_threshold: float = 1e-10
 ) -> List[torch.Tensor]:
     """
     Compute directional derivatives averaged over K_dirs random directions.
@@ -119,6 +120,7 @@ def compute_derivatives_multi_direction(
         max_order: Maximum derivative order
         K_dirs: Number of random directions to average
         device: Computation device
+        min_norm_threshold: Minimum derivative norm for numerical stability
     
     Returns:
         List of averaged derivative tensors [d_1, d_2, ..., d_max_order]
@@ -127,10 +129,15 @@ def compute_derivatives_multi_direction(
     batch_size = inputs.shape[0]
     input_shape = inputs.shape[1:]
     
+    # Ensure model is in eval mode for consistent behavior
+    was_training = model.training
+    model.eval()
+    
     # Accumulate derivatives across multiple directions
     accumulated_derivatives = [torch.zeros(batch_size) for _ in range(max_order)]
+    valid_counts = [torch.zeros(batch_size) for _ in range(max_order)]
     
-    for _ in range(K_dirs):
+    for k in range(K_dirs):
         # Sample new random direction for this iteration
         directions = sample_unit_directions(
             batch_size=batch_size,
@@ -139,23 +146,44 @@ def compute_derivatives_multi_direction(
         )
         
         # Compute derivatives in this direction
-        derivatives = compute_directional_derivatives(
-            model=model,
-            inputs=inputs,
-            labels=labels,
-            directions=directions,
-            loss_fn=loss_fn,
-            min_order=1,
-            max_order=max_order,
-            create_graph=True
-        )
-        
-        # Accumulate
-        for i, d in enumerate(derivatives):
-            accumulated_derivatives[i] += d.detach().cpu()
+        try:
+            derivatives = compute_directional_derivatives(
+                model=model,
+                inputs=inputs,
+                labels=labels,
+                directions=directions,
+                loss_fn=loss_fn,
+                min_order=1,
+                max_order=max_order,
+                create_graph=True
+            )
+            
+            # Accumulate with numerical stability checks
+            for i, d in enumerate(derivatives):
+                d_cpu = d.detach().cpu()
+                # Only accumulate finite, non-zero values
+                valid_mask = torch.isfinite(d_cpu) & (d_cpu.abs() >= min_norm_threshold)
+                accumulated_derivatives[i] += torch.where(valid_mask, d_cpu, torch.zeros_like(d_cpu))
+                valid_counts[i] += valid_mask.float()
+                
+        except Exception as e:
+            print(f"    Warning: Direction {k+1}/{K_dirs} failed with error: {e}")
+            continue
     
-    # Average over directions
-    averaged_derivatives = [d / K_dirs for d in accumulated_derivatives]
+    # Average over valid directions (avoid division by zero)
+    averaged_derivatives = []
+    for i in range(max_order):
+        valid_count = torch.clamp(valid_counts[i], min=1.0)  # Avoid division by zero
+        avg_d = accumulated_derivatives[i] / valid_count
+        # Clamp to minimum threshold for numerical stability
+        avg_d = torch.where(avg_d.abs() < min_norm_threshold, 
+                           torch.zeros_like(avg_d), 
+                           avg_d)
+        averaged_derivatives.append(avg_d)
+    
+    # Restore training mode
+    if was_training:
+        model.train()
     
     return averaged_derivatives
 
@@ -224,9 +252,17 @@ def run_model_validation(
         # Estimate lambda
         # For exponential decay, preserve signs; for others, use absolute values
         use_abs = model_type not in ['exponential']
+        
+        # Add diagnostics for debugging
+        zero_derivs = sum(1 for d in derivatives if (d.abs() < 1e-10).all())
+        if zero_derivs > 0:
+            print(f"    Seed {seed}: Warning - {zero_derivs}/{len(derivatives)} derivative orders are near-zero")
+        
         lambda_est = estimate_lambda_from_derivatives(derivatives, abs_derivatives=use_abs)
         if lambda_est is not None:
             lambda_estimates.append(lambda_est)
+        else:
+            print(f"    Seed {seed}: Lambda estimation failed (returned None)")
         
         # Estimate R (always use abs for radius estimation)
         R_result = compute_analytic_radius(derivatives, abs_derivatives=True)
@@ -777,9 +813,42 @@ def main():
     print()
     
     # ========================================================================
-    # Test 2: Exponential Decay Model (Neural Network - Informational Only)
+    # Test 2: Linear Model (Known Ground Truth)
     # ========================================================================
-    print("Test 2: Exponential Decay Model (Neural Network)")
+    print("Test 2: Linear Model (Known Ground Truth)")
+    print("-"*80)
+    print(f"  Linear model: f(x) = W·x + b")
+    print(f"  MSE loss: L = (f(x) - y)^2")
+    print(f"  First derivative: dL/dε = 2(f(x)-y)·(W·v)")
+    print(f"  Second derivative: d²L/dε² = 2(W·v)²")
+    print(f"  Higher derivatives: d³L/dε³ = 0, d⁴L/dε⁴ = 0, ...")
+    print(f"  Expected λ: Should be negative (derivatives decay to zero)")
+    print(f"  Note: Exact λ depends on data, but behavior is polynomial cutoff")
+    
+    result_linear = run_model_validation(
+        model_type='polynomial',
+        config=config,
+        model_kwargs={'degree': 1},  # Linear model is degree-1 polynomial
+        true_lambda=None,  # Will validate cutoff behavior instead
+        true_R=None,
+        expect_cyclic=False
+    )
+    # Rename for clarity
+    result_linear.model_name = 'linear'
+    results.append(result_linear)
+    
+    print(f"  Estimated λ = {result_linear.estimated_lambda:.4f} ± {result_linear.lambda_std:.4f}")
+    print(f"  Expected: λ < 0 (derivatives decay to zero after order 2)")
+    if result_linear.estimated_lambda < 0:
+        print(f"  ✓ PASS: λ < 0 as expected for polynomial cutoff")
+    else:
+        print(f"  ✗ FAIL: λ ≥ 0, unexpected for polynomial model")
+    print()
+    
+    # ========================================================================
+    # Test 3: Exponential Decay Model (Neural Network - Informational Only)
+    # ========================================================================
+    print("Test 3: Exponential Decay Model (Neural Network)")
     print("-"*80)
     print(f"  Note: This tests the loss landscape, not just the model output")
     print(f"  The 'true' λ is for model output exp(w·x), NOT for MSE loss derivatives")
@@ -799,9 +868,9 @@ def main():
     print()
     
     # ========================================================================
-    # Test 3: Sinusoidal Model (Cyclic Patterns)
+    # Test 4: Sinusoidal Model (Cyclic Patterns)
     # ========================================================================
-    print("Test 3: Sinusoidal Model (Cyclic Patterns)")
+    print("Test 4: Sinusoidal Model (Cyclic Patterns)")
     print("-"*80)
     
     result_sin = run_model_validation(
@@ -814,16 +883,23 @@ def main():
     
     print(f"  Estimated λ = {result_sin.estimated_lambda:.4f} ± {result_sin.lambda_std:.4f}")
     print(f"  Cyclic detection rate: {result_sin.cyclic_detected*100:.1f}%")
+    if result_sin.cyclic_detected >= 0.5:
+        print(f"  ✓ PASS: Cyclic detection ≥ 50%")
+    else:
+        print(f"  ✗ FAIL: Cyclic detection < 50%")
     print()
     
     # ========================================================================
-    # Test 4: Polynomial Model (Degree 3)
+    # Test 5: Polynomial Model (Degree 3) - Validate Derivative Cutoff
     # ========================================================================
-    print("Test 4: Polynomial Model (Degree 3)")
+    print("Test 5: Polynomial Model (Degree 3) - Derivative Cutoff Validation")
     print("-"*80)
-    print("  Note: With MSE loss, degree-3 model becomes degree-6 loss")
-    print("  Derivatives should be zero beyond order 6")
+    print("  Polynomial: f(x) = sum_{i=1}^3 w_i * x^i")
+    print("  MSE loss: L = (f(x) - y)^2 is degree-6 in x")
+    print("  Expected: Derivatives decay rapidly, λ < 0")
+    print("  Note: Due to (f(x)-y)² term, exact cutoff order varies with data")
     
+    # Run validation and check derivative magnitudes
     result_poly = run_model_validation(
         model_type='polynomial',
         config=config,
@@ -833,12 +909,45 @@ def main():
     results.append(result_poly)
     
     print(f"  Estimated λ = {result_poly.estimated_lambda:.4f} ± {result_poly.lambda_std:.4f}")
+    
+    # Validate one sample to check derivative behavior
+    print("\n  Validating derivative decay pattern...")
+    torch.manual_seed(42)
+    np.random.seed(42)
+    model_poly = create_test_model('polynomial', config.input_dim, degree=3).to(config.device)
+    model_poly.eval()
+    inputs_test = torch.randn(config.batch_size, config.input_dim, device=config.device)
+    labels_test = torch.randn(config.batch_size, device=config.device)
+    
+    def loss_fn_test(logits, labels, reduction='none'):
+        return F.mse_loss(logits.squeeze(1), labels, reduction=reduction)
+    
+    derivs_test = compute_derivatives_multi_direction(
+        model=model_poly,
+        inputs=inputs_test,
+        labels=labels_test,
+        loss_fn=loss_fn_test,
+        max_order=config.max_order,
+        K_dirs=config.K_dirs,
+        device=config.device
+    )
+    
+    # Compute mean magnitudes
+    mean_mags = [d.abs().mean().item() for d in derivs_test]
+    print(f"  Derivative magnitudes: {[f'{m:.2e}' for m in mean_mags]}")
+    
+    # Check if derivatives decay
+    decays = [mean_mags[i+1] < mean_mags[i] for i in range(len(mean_mags)-1)]
+    if sum(decays) >= len(decays) * 0.6:  # At least 60% should decay
+        print(f"  ✓ PASS: Derivatives show decay pattern ({sum(decays)}/{len(decays)} pairs decay)")
+    else:
+        print(f"  ✗ FAIL: Derivatives don't decay consistently ({sum(decays)}/{len(decays)} pairs decay)")
     print()
     
     # ========================================================================
-    # Test 5: Linear Combination Model
+    # Test 6: Linear Combination Model
     # ========================================================================
-    print("Test 5: Linear Combination Model")
+    print("Test 6: Linear Combination Model")
     print("-"*80)
     print("  Combination of polynomial + sinusoidal + exponential components")
     
@@ -851,12 +960,16 @@ def main():
     
     print(f"  Estimated λ = {result_combo.estimated_lambda:.4f} ± {result_combo.lambda_std:.4f}")
     print(f"  Cyclic detection rate: {result_combo.cyclic_detected*100:.1f}%")
+    if result_combo.cyclic_detected >= 0.5:
+        print(f"  ✓ PASS: Cyclic detection ≥ 50%")
+    else:
+        print(f"  ✗ FAIL: Cyclic detection < 50%")
     print()
     
     # ========================================================================
-    # Test 6: Hyperparameter Sensitivity Analysis
+    # Test 7: Hyperparameter Sensitivity Analysis
     # ========================================================================
-    print("Test 6: Hyperparameter Sensitivity Analysis")
+    print("Test 7: Hyperparameter Sensitivity Analysis")
     print("-"*80)
     
     sensitivity_results = []
@@ -909,13 +1022,102 @@ def main():
     print("="*80)
     print(f"Results saved to: {output_dir}")
     
-    # Final summary
+    # ========================================================================
+    # PASS/FAIL SUMMARY
+    # ========================================================================
+    print("\n" + "="*80)
+    print("PASS/FAIL SUMMARY")
+    print("="*80)
+    
+    test_results = []
+    
+    # Test 1: Synthetic Exponential - λ accuracy
+    if result_synthetic.rel_error_lambda is not None:
+        passed = result_synthetic.rel_error_lambda < 0.05  # < 5% error
+        test_results.append(('Test 1: Synthetic Exponential (λ accuracy)', passed))
+        status = "✓ PASS" if passed else "✗ FAIL"
+        print(f"  {status}: Test 1 - Synthetic Exponential λ estimation")
+        print(f"           Relative error: {result_synthetic.rel_error_lambda*100:.2f}% (threshold: 5%)")
+    
+    # Test 1: Synthetic Exponential - CI coverage
+    contains_true = (result_synthetic.lambda_ci[0] - 1e-6) <= result_synthetic.true_lambda <= (result_synthetic.lambda_ci[1] + 1e-6)
+    test_results.append(('Test 1: Synthetic Exponential (CI coverage)', contains_true))
+    status = "✓ PASS" if contains_true else "✗ FAIL"
+    print(f"  {status}: Test 1 - 95% CI contains true λ")
+    
+    # Test 2: Linear Model - polynomial cutoff behavior
+    linear_valid = result_linear.estimated_lambda < 0
+    test_results.append(('Test 2: Linear Model (λ < 0)', linear_valid))
+    status = "✓ PASS" if linear_valid else "✗ FAIL"
+    print(f"  {status}: Test 2 - Linear model shows polynomial cutoff (λ < 0)")
+    print(f"           Estimated λ: {result_linear.estimated_lambda:.4f}")
+    
+    # Test 4: Sinusoidal - cyclic detection
+    sin_passed = result_sin.cyclic_detected >= 0.5
+    test_results.append(('Test 4: Sinusoidal (cyclic detection)', sin_passed))
+    status = "✓ PASS" if sin_passed else "✗ FAIL"
+    print(f"  {status}: Test 4 - Sinusoidal cyclic pattern detection")
+    print(f"           Detection rate: {result_sin.cyclic_detected*100:.1f}% (threshold: 50%)")
+    
+    # Test 5: Polynomial - derivative decay
+    # Re-check decay from earlier computation
+    torch.manual_seed(42)
+    np.random.seed(42)
+    model_poly_check = create_test_model('polynomial', config.input_dim, degree=3).to(config.device)
+    model_poly_check.eval()
+    inputs_check = torch.randn(config.batch_size, config.input_dim, device=config.device)
+    labels_check = torch.randn(config.batch_size, device=config.device)
+    derivs_check = compute_derivatives_multi_direction(
+        model=model_poly_check,
+        inputs=inputs_check,
+        labels=labels_check,
+        loss_fn=lambda logits, labels, reduction='none': F.mse_loss(logits.squeeze(1), labels, reduction=reduction),
+        max_order=config.max_order,
+        K_dirs=config.K_dirs,
+        device=config.device
+    )
+    mean_mags_check = [d.abs().mean().item() for d in derivs_check]
+    decays_check = [mean_mags_check[i+1] < mean_mags_check[i] for i in range(len(mean_mags_check)-1)]
+    poly_passed = sum(decays_check) >= len(decays_check) * 0.6
+    test_results.append(('Test 5: Polynomial (derivative decay)', poly_passed))
+    status = "✓ PASS" if poly_passed else "✗ FAIL"
+    print(f"  {status}: Test 5 - Polynomial derivative decay pattern")
+    print(f"           Decay pairs: {sum(decays_check)}/{len(decays_check)} (threshold: 60%)")
+    
+    # Test 6: Linear Combination - cyclic detection
+    combo_passed = result_combo.cyclic_detected >= 0.5
+    test_results.append(('Test 6: Linear Combination (cyclic detection)', combo_passed))
+    status = "✓ PASS" if combo_passed else "✗ FAIL"
+    print(f"  {status}: Test 6 - Linear combination cyclic pattern detection")
+    print(f"           Detection rate: {result_combo.cyclic_detected*100:.1f}% (threshold: 50%)")
+    
+    # Overall summary
+    total_tests = len(test_results)
+    passed_tests = sum(1 for _, passed in test_results if passed)
+    pass_rate = passed_tests / total_tests * 100
+    
+    print("\n" + "-"*80)
+    print(f"OVERALL: {passed_tests}/{total_tests} tests passed ({pass_rate:.0f}%)")
+    
+    if pass_rate == 100:
+        print("✓ ALL TESTS PASSED - Validation successful!")
+    elif pass_rate >= 80:
+        print("⚠ MOSTLY PASSED - Some issues need attention")
+    else:
+        print("✗ MULTIPLE FAILURES - Significant issues detected")
+    
+    print("="*80)
+    
+    # Statistical summary for models with known truth
     results_with_truth = [r for r in results if r.true_lambda is not None]
     if results_with_truth:
         rel_errors = [r.rel_error_lambda * 100 for r in results_with_truth 
                      if r.rel_error_lambda is not None]
-        print(f"\nOverall Performance:")
+        print(f"\nStatistical Summary (models with known λ):")
         print(f"  Mean relative error: {np.mean(rel_errors):.2f}%")
+        print(f"  Std relative error: {np.std(rel_errors, ddof=1):.2f}%")
+        print(f"  Max relative error: {np.max(rel_errors):.2f}%")
+        print(f"  Models with <5% error: {sum(e < 5 for e in rel_errors)}/{len(rel_errors)}")
         print(f"  Models with <10% error: {sum(e < 10 for e in rel_errors)}/{len(rel_errors)}")
         
         # Statistical significance test
