@@ -87,26 +87,54 @@ def compute_directional_derivatives(
     
     all_derivatives = []
     
-    # Compute derivatives sequentially from 1 to max_order
-    for n in range(1, max_order + 1):
-        # Compute gradient w.r.t. inputs
-        grads = torch.autograd.grad(
-            loss_scalar,
-            inputs,
-            create_graph=create_graph,
-            retain_graph=True
-        )[0]  # [B, ...]
+    # Compute first-order derivative
+    # Compute gradient w.r.t. inputs
+    grads = torch.autograd.grad(
+        loss_scalar,
+        inputs,
+        create_graph=(max_order > 1 and create_graph),  # Only create graph if we need higher orders
+        retain_graph=True
+    )[0]  # [B, ...]
+    
+    # Compute directional derivative: grad * direction
+    # Flatten both to compute dot product, then sum over spatial dimensions
+    grads_flat = grads.view(grads.size(0), -1)  # [B, D]
+    dirs_flat = directions.view(directions.size(0), -1)  # [B, D]
+    d_1 = (grads_flat * dirs_flat).sum(dim=1)  # [B]
+    
+    all_derivatives.append(d_1)
+    
+    # Compute higher-order derivatives sequentially from 2 to max_order
+    if max_order > 1:
+        if not create_graph:
+            raise ValueError("create_graph must be True to compute derivatives of order > 1")
         
-        # Compute directional derivative: grad * direction
-        # Flatten both to compute dot product, then sum over spatial dimensions
-        grads_flat = grads.view(grads.size(0), -1)  # [B, D]
-        dirs_flat = directions.view(directions.size(0), -1)  # [B, D]
-        d_n = (grads_flat * dirs_flat).sum(dim=1)  # [B]
-        
-        all_derivatives.append(d_n)
-        
-        # Prepare for next order: the scalar becomes the sum of current directional derivatives
-        loss_scalar = d_n.sum()
+        current_derivative = d_1
+        for n in range(2, max_order + 1):
+            # Check if current_derivative has grad_fn (it might be zero/constant for high orders)
+            if not hasattr(current_derivative, 'grad_fn') or current_derivative.grad_fn is None:
+                # Derivative has become constant (likely zero for polynomial beyond its degree)
+                # All higher derivatives will also be zero
+                zero_deriv = torch.zeros_like(current_derivative)
+                all_derivatives.append(zero_deriv)
+                current_derivative = zero_deriv
+                continue
+            
+            # Compute gradient of the previous directional derivative w.r.t. inputs
+            # We need to sum the current derivative to get a scalar for backprop
+            grads = torch.autograd.grad(
+                current_derivative.sum(),
+                inputs,
+                create_graph=True,  # Always True for higher order derivatives
+                retain_graph=True
+            )[0]  # [B, ...]
+            
+            # Compute directional derivative of this gradient
+            grads_flat = grads.view(grads.size(0), -1)  # [B, D]
+            d_n = (grads_flat * dirs_flat).sum(dim=1)  # [B]
+            
+            all_derivatives.append(d_n)
+            current_derivative = d_n
     
     # Return only the derivatives in the requested range
     return all_derivatives[min_order - 1:max_order]
