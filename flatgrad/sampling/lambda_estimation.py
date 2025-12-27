@@ -105,8 +105,12 @@ def estimate_lambda_from_derivatives(
         # Get ratios for this sample
         sample_ratios = ratios_cpu[sample_idx].numpy()  # [n_ratios]
         
+        # Ensure ratios are positive before taking log (clamp to minimum positive value)
+        # This prevents log of zero or negative numbers
+        sample_ratios_clamped = np.maximum(sample_ratios, 1e-10)
+        
         # Compute log(ratios) with numerical stability
-        log_ratios = np.log(sample_ratios + 1e-12)
+        log_ratios = np.log(sample_ratios_clamped)
         
         # λ is the mean of log(ratios) for this sample
         lambda_val = np.mean(log_ratios)
