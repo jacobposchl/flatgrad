@@ -5,7 +5,7 @@ This module provides test models for validating lambda estimation and metrics.
 Models are designed to have known analytical properties (lambda, R, omega) that
 can be compared against estimated values.
 
-All models are data-agnostic and work with arbitrary input shapes.
+All models are data-agnostic
 '''
 
 import torch

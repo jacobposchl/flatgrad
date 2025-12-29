@@ -123,3 +123,126 @@ def estimate_lambda_from_derivatives(
         return None
     
     return float(np.mean(lambda_values))
+
+
+def estimate_lambda_per_direction(
+    model: torch.nn.Module,
+    inputs: torch.Tensor,
+    labels: torch.Tensor,
+    loss_fn: Callable,
+    max_order: int = 4,
+    K_dirs: int = 5,
+    min_first_derivative: float = 1e-8,
+) -> dict:
+    """
+    Estimate λ by computing it separately for each random direction, then aggregating.
+    
+    This provides the distribution of λ estimates
+    across different directions, including mean and variance.
+    
+    Args:
+        model: Neural network model
+        inputs: Input batch [B, ...]
+        labels: Labels [B]
+        loss_fn: Loss function with reduction='none'
+        max_order: Maximum derivative order (default: 4)
+        K_dirs: Number of random directions (default: 5)
+        min_first_derivative: Minimum first derivative threshold (default: 1e-8)
+    
+    Returns:
+        Dictionary containing:
+            - 'lambda_mean': Mean λ across directions
+            - 'lambda_std': Standard deviation of λ
+            - 'lambda_values': List of λ values (one per direction)
+            - 'n_valid_directions': Number of directions that yielded valid λ
+
+    """
+    # Save training state and switch to eval mode
+    was_training = model.training
+    model.eval()
+    
+    batch_size = inputs.shape[0]
+    input_shape = inputs.shape[1:]
+    device = inputs.device
+    
+    lambda_values_per_direction = []
+    
+    # Compute λ for each direction independently
+    for _ in range(K_dirs):
+        # Sample random direction
+        direction = sample_unit_directions(batch_size, input_shape, device)
+        
+        # Compute derivatives for this direction
+        try:
+            derivatives = compute_directional_derivatives(
+                model=model,
+                inputs=inputs,
+                labels=labels,
+                directions=direction,
+                loss_fn=loss_fn,
+                min_order=1,
+                max_order=max_order,
+                create_graph=False  # Don't need graph for estimation
+            )
+            
+            # Take absolute values
+            derivatives = [d.abs() for d in derivatives]
+            
+            # Compute log derivatives: log|d_n| for each order
+            # Average across batch dimension
+            log_derivatives = []
+            valid_samples = torch.ones(batch_size, dtype=torch.bool, device=device)
+            
+            for n, d_n in enumerate(derivatives):
+                # Filter out samples with tiny first derivative
+                if n == 0:
+                    valid_samples &= (d_n >= min_first_derivative)
+                
+                # Filter out invalid values
+                valid_samples &= torch.isfinite(d_n)
+                valid_samples &= (d_n > 1e-10)
+                
+                if valid_samples.sum() == 0:
+                    break
+                
+                # Compute mean log derivative across valid samples
+                log_d_n = torch.log(d_n[valid_samples]).mean().item()
+                log_derivatives.append(log_d_n)
+            
+            # Fit linear regression: log|d_n| = intercept + slope * n
+            # Slope is our λ estimate for this direction
+            if len(log_derivatives) >= 2:
+                orders = np.arange(1, len(log_derivatives) + 1)
+                log_derivs_array = np.array(log_derivatives)
+                
+                # Simple linear fit
+                slope, intercept = np.polyfit(orders, log_derivs_array, 1)
+                
+                if np.isfinite(slope):
+                    lambda_values_per_direction.append(slope)
+        
+        except Exception:
+            # Skip this direction if computation fails
+            continue
+    
+    # Restore training state
+    if was_training:
+        model.train()
+    
+    # Aggregate results
+    if len(lambda_values_per_direction) == 0:
+        return {
+            'lambda_mean': None,
+            'lambda_std': None,
+            'lambda_values': [],
+            'n_valid_directions': 0
+        }
+    
+    lambda_values_array = np.array(lambda_values_per_direction)
+    
+    return {
+        'lambda_mean': float(np.mean(lambda_values_array)),
+        'lambda_std': float(np.std(lambda_values_array, ddof=1 if len(lambda_values_array) > 1 else 0)),
+        'lambda_values': lambda_values_per_direction,
+        'n_valid_directions': len(lambda_values_per_direction)
+    }
