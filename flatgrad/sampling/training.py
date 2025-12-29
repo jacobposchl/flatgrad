@@ -7,6 +7,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Callable, Optional, Dict, List
 import time
+import numpy as np
+
+
+def compute_ece(logits: torch.Tensor, labels: torch.Tensor, n_bins: int = 10) -> float:
+    """
+    Compute Expected Calibration Error (ECE).
+    
+    Args:
+        logits: Model logits [N, C]
+        labels: Ground truth labels [N]
+        n_bins: Number of bins for calibration (default: 10)
+    
+    Returns:
+        ECE score (lower is better)
+    """
+    softmaxes = F.softmax(logits, dim=1)
+    confidences, predictions = torch.max(softmaxes, dim=1)
+    accuracies = predictions.eq(labels)
+    
+    ece = 0.0
+    bin_boundaries = torch.linspace(0, 1, n_bins + 1)
+    
+    for bin_lower, bin_upper in zip(bin_boundaries[:-1], bin_boundaries[1:]):
+        in_bin = (confidences > bin_lower) & (confidences <= bin_upper)
+        prop_in_bin = in_bin.float().mean().item()
+        
+        if prop_in_bin > 0:
+            accuracy_in_bin = accuracies[in_bin].float().mean().item()
+            avg_confidence_in_bin = confidences[in_bin].mean().item()
+            ece += abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
+    
+    return ece
 
 
 def train_epoch(
@@ -71,6 +103,7 @@ def evaluate(
     test_loader: torch.utils.data.DataLoader,
     loss_fn: Callable,
     device: torch.device,
+    compute_calibration: bool = False,
 ) -> Dict[str, float]:
     """
     Evaluate model on test set.
@@ -80,14 +113,18 @@ def evaluate(
         test_loader: Test data loader
         loss_fn: Loss function
         device: Device to evaluate on
+        compute_calibration: Whether to compute ECE (default: False)
     
     Returns:
-        Dictionary with 'loss' and 'accuracy'
+        Dictionary with 'loss', 'accuracy', and optionally 'ece'
     """
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
+    
+    all_logits = []
+    all_labels = []
     
     with torch.no_grad():
         for inputs, labels in test_loader:
@@ -100,11 +137,22 @@ def evaluate(
             predictions = logits.argmax(dim=1)
             total_correct += (predictions == labels).sum().item()
             total_samples += inputs.size(0)
+            
+            if compute_calibration:
+                all_logits.append(logits)
+                all_labels.append(labels)
     
-    return {
+    result = {
         'loss': total_loss / total_samples,
         'accuracy': total_correct / total_samples
     }
+    
+    if compute_calibration and len(all_logits) > 0:
+        all_logits = torch.cat(all_logits, dim=0)
+        all_labels = torch.cat(all_labels, dim=0)
+        result['ece'] = compute_ece(all_logits, all_labels)
+    
+    return result
 
 
 class LambdaTracker:
