@@ -13,33 +13,43 @@ def plot_lambda_evolution_multi_reg(
     save_path: Optional[str] = None
 ):
     """
-    Plot lambda evolution for multiple regularization strengths.
+    Plot lambda evolution for multiple regularization strengths or target lambdas.
     
     Args:
-        results_by_reg: Dictionary mapping reg_scale to experiment results
+        results_by_reg: Dictionary mapping reg_scale/target_lambda to experiment results
                        Each result should have a 'tracker' with get_history()
         dataset_name: Name of the dataset (for title)
         save_path: Optional path to save figure
     """
     fig, ax = plt.subplots(figsize=(12, 7))
     
-    # Sort by reg_scale for consistent ordering
-    reg_scales = sorted(results_by_reg.keys())
+    # Sort by key for consistent ordering
+    keys = sorted(results_by_reg.keys())
+    
+    # Detect if using target_lambda or reg_scale
+    first_result = results_by_reg[keys[0]]
+    use_target_lambda = first_result.get('target_lambda') is not None
     
     # Color map
-    colors = plt.cm.viridis(np.linspace(0, 1, len(reg_scales)))
+    colors = plt.cm.viridis(np.linspace(0, 1, len(keys)))
     
-    for i, reg_scale in enumerate(reg_scales):
-        result = results_by_reg[reg_scale]
+    for i, key in enumerate(keys):
+        result = results_by_reg[key]
         tracker_history = result['tracker'].get_history()
         
         epochs = tracker_history['epochs']
         lambda_means = tracker_history['lambda_means']
         lambda_stds = tracker_history['lambda_stds']
         
+        # Create label based on mode
+        if use_target_lambda:
+            label = f'Target λ: {key:.2f}'
+        else:
+            label = f'Reg Scale: {key}'
+        
         # Plot mean with shaded std
         ax.plot(epochs, lambda_means, marker='o', linestyle='-', linewidth=2,
-                color=colors[i], label=f'Reg Scale: {reg_scale}')
+                color=colors[i], label=label)
         ax.fill_between(epochs, 
                         np.array(lambda_means) - np.array(lambda_stds),
                         np.array(lambda_means) + np.array(lambda_stds),
@@ -47,8 +57,12 @@ def plot_lambda_evolution_multi_reg(
     
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Lambda (λ)', fontsize=12)
-    ax.set_title(f'{dataset_name}: Lambda Evolution for Different Regularization Strengths', 
-                 fontsize=14, fontweight='bold')
+    if use_target_lambda:
+        ax.set_title(f'{dataset_name}: Lambda Evolution for Different Target Lambdas', 
+                     fontsize=14, fontweight='bold')
+    else:
+        ax.set_title(f'{dataset_name}: Lambda Evolution for Different Regularization Strengths', 
+                     fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=10, loc='best')
     
@@ -67,39 +81,84 @@ def plot_metric_vs_reg_scale(
     metric_values: List[float],
     metric_name: str = "Accuracy",
     dataset_name: str = "MNIST",
-    save_path: Optional[str] = None
+    save_path: Optional[str] = None,
+    use_target_lambda: bool = False
 ):
     """
-    Plot a metric (accuracy, ECE, or generalization gap) vs regularization scale.
+    Plot a metric (accuracy, ECE, or generalization gap) vs regularization scale or target lambda.
     
     Args:
-        reg_scales: List of regularization scale values
+        reg_scales: List of regularization scale or target lambda values
         metric_values: Corresponding metric values
         metric_name: Name of the metric (for labeling)
         dataset_name: Name of the dataset
         save_path: Optional path to save figure
+        use_target_lambda: Whether using target lambda mode (default: False)
     """
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    # Sort by reg_scale
+    # Sort by key
     sorted_indices = np.argsort(reg_scales)
-    reg_scales_sorted = np.array(reg_scales)[sorted_indices]
+    keys_sorted = np.array(reg_scales)[sorted_indices]
     metric_values_sorted = np.array(metric_values)[sorted_indices]
     
-    # Plot
-    ax.plot(reg_scales_sorted, metric_values_sorted, marker='o', linestyle='-', 
-            linewidth=2, markersize=8, color='steelblue')
+    # Find optimal value (best depends on metric)
+    if metric_name.lower() in ['accuracy', 'test accuracy']:
+        # Higher is better
+        optimal_idx = np.argmax(metric_values_sorted)
+        optimal_color = 'green'
+        optimal_marker = 's'
+        optimal_size = 12
+    elif metric_name.lower() in ['ece', 'expected calibration error']:
+        # Lower is better
+        optimal_idx = np.argmin(metric_values_sorted)
+        optimal_color = 'green'
+        optimal_marker = 's'
+        optimal_size = 12
+    elif 'gap' in metric_name.lower():
+        # Lower is better
+        optimal_idx = np.argmin(metric_values_sorted)
+        optimal_color = 'green'
+        optimal_marker = 's'
+        optimal_size = 12
+    else:
+        optimal_idx = None
+    
+    # Plot all points
+    ax.plot(keys_sorted, metric_values_sorted, marker='o', linestyle='-', 
+            linewidth=2, markersize=8, color='steelblue', label='All experiments')
+    
+    # Highlight optimal point
+    if optimal_idx is not None:
+        ax.scatter(keys_sorted[optimal_idx], metric_values_sorted[optimal_idx],
+                  marker=optimal_marker, s=optimal_size**2, color=optimal_color,
+                  edgecolors='black', linewidths=2, zorder=5,
+                  label=f'Optimal: λ={keys_sorted[optimal_idx]:.2f}')
     
     # Add value labels
-    for x, y in zip(reg_scales_sorted, metric_values_sorted):
-        ax.annotate(f'{y:.4f}', (x, y), textcoords="offset points", 
-                   xytext=(0, 10), ha='center', fontsize=9)
+    for i, (x, y) in enumerate(zip(keys_sorted, metric_values_sorted)):
+        if i == optimal_idx:
+            # Highlight optimal value
+            ax.annotate(f'{y:.4f}★', (x, y), textcoords="offset points", 
+                       xytext=(0, 15), ha='center', fontsize=10, 
+                       fontweight='bold', color=optimal_color)
+        else:
+            ax.annotate(f'{y:.4f}', (x, y), textcoords="offset points", 
+                       xytext=(0, 10), ha='center', fontsize=9)
     
-    ax.set_xlabel('Regularization Scale', fontsize=12)
+    # Set labels based on mode
+    if use_target_lambda:
+        ax.set_xlabel('Target Lambda (λ)', fontsize=12)
+        ax.set_title(f'{dataset_name}: {metric_name} vs Target Lambda', 
+                     fontsize=14, fontweight='bold')
+    else:
+        ax.set_xlabel('Regularization Scale', fontsize=12)
+        ax.set_title(f'{dataset_name}: {metric_name} vs Regularization Strength', 
+                     fontsize=14, fontweight='bold')
+    
     ax.set_ylabel(metric_name, fontsize=12)
-    ax.set_title(f'{dataset_name}: {metric_name} vs Regularization Strength', 
-                 fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10, loc='best')
     
     plt.tight_layout()
     
@@ -117,22 +176,26 @@ def plot_all_metrics_vs_reg_scale(
     save_path_prefix: Optional[str] = None
 ):
     """
-    Create plots for accuracy, ECE, and generalization gap vs reg scale.
+    Create plots for accuracy, ECE, and generalization gap vs reg scale or target lambda.
     
     Args:
-        results_by_reg: Dictionary mapping reg_scale to experiment results
+        results_by_reg: Dictionary mapping reg_scale/target_lambda to experiment results
         dataset_name: Name of the dataset
         save_path_prefix: Optional prefix for save paths (will add metric name)
     """
-    reg_scales = sorted(results_by_reg.keys())
+    keys = sorted(results_by_reg.keys())
+    
+    # Detect if using target_lambda or reg_scale
+    first_result = results_by_reg[keys[0]]
+    use_target_lambda = first_result.get('target_lambda') is not None
     
     # Extract metrics
     test_accuracies = []
     test_eces = []
     gen_gaps = []
     
-    for reg_scale in reg_scales:
-        result = results_by_reg[reg_scale]
+    for key in keys:
+        result = results_by_reg[key]
         test_accuracies.append(result['final_test']['accuracy'])
         test_eces.append(result['final_test'].get('ece', 0.0))
         gen_gap = result['final_train']['accuracy'] - result['final_test']['accuracy']
@@ -143,24 +206,24 @@ def plot_all_metrics_vs_reg_scale(
         acc_path = f"{save_path_prefix}_accuracy.png"
     else:
         acc_path = f"results/proof_of_concept/{dataset_name.lower()}/metrics_vs_reg/accuracy.png"
-    plot_metric_vs_reg_scale(reg_scales, test_accuracies, "Test Accuracy", 
-                            dataset_name, acc_path)
+    plot_metric_vs_reg_scale(keys, test_accuracies, "Test Accuracy", 
+                            dataset_name, acc_path, use_target_lambda=use_target_lambda)
     
     # Plot ECE
     if save_path_prefix:
         ece_path = f"{save_path_prefix}_ece.png"
     else:
         ece_path = f"results/proof_of_concept/{dataset_name.lower()}/metrics_vs_reg/ece.png"
-    plot_metric_vs_reg_scale(reg_scales, test_eces, "Expected Calibration Error (ECE)", 
-                            dataset_name, ece_path)
+    plot_metric_vs_reg_scale(keys, test_eces, "Expected Calibration Error (ECE)", 
+                            dataset_name, ece_path, use_target_lambda=use_target_lambda)
     
     # Plot generalization gap
     if save_path_prefix:
         gap_path = f"{save_path_prefix}_gen_gap.png"
     else:
         gap_path = f"results/proof_of_concept/{dataset_name.lower()}/metrics_vs_reg/gen_gap.png"
-    plot_metric_vs_reg_scale(reg_scales, gen_gaps, "Generalization Gap (Train - Test Acc)", 
-                            dataset_name, gap_path)
+    plot_metric_vs_reg_scale(keys, gen_gaps, "Generalization Gap (Train - Test Acc)", 
+                            dataset_name, gap_path, use_target_lambda=use_target_lambda)
 
 
 def plot_reg_magnitude_evolution(

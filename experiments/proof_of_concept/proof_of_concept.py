@@ -30,13 +30,13 @@ from flatgrad.sampling.vision_models import create_vision_model
 from flatgrad.sampling.lambda_estimation import estimate_lambda_per_direction
 from flatgrad.sampling.training import train_epoch, evaluate, LambdaTracker, RegTracker
 from flatgrad.sampling.regularizers import compute_lambda_regularizer, compute_lambda_target_regularizer
-from helpers.visualization import (
+from experiments.proof_of_concept.helpers.visualization import (
     plot_lambda_evolution, 
     plot_derivative_profile,
     plot_cross_dataset_comparison,
     plot_lambda_distribution
 )
-from helpers.reg_comparison_plots import (
+from experiments.proof_of_concept.helpers.reg_comparison_plots import (
     plot_lambda_evolution_multi_reg,
     plot_all_metrics_vs_reg_scale,
     plot_reg_magnitude_evolution,
