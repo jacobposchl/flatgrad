@@ -22,6 +22,7 @@ import random
 from pathlib import Path
 import sys
 from tqdm import tqdm
+import sys
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -328,53 +329,60 @@ def experiment_2_mnist_training(n_epochs=50, target_lambda=None, reg_scale=None)
     reg_label = f"λ_tgt={target_lambda:.2f}" if target_lambda is not None else f"reg={reg_scale}" if reg_scale else "no_reg"
     epoch_pbar = tqdm(range(1, n_epochs + 1), desc=f"MNIST ({reg_label})", 
                       position=1, leave=False,
+                      dynamic_ncols=True,
+                      mininterval=0.1,
+                      file=sys.stdout,
                       bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
     
-    for epoch in epoch_pbar:
-        # Train
-        train_metrics = train_epoch(
-            model, train_loader, optimizer,
-            F.cross_entropy, DEVICE, regularizer_fn
-        )
-        
-        # Evaluate
-        test_metrics = evaluate(model, test_loader, F.cross_entropy, DEVICE)
-        
-        # Store metrics
-        train_history['accuracy'].append(train_metrics['accuracy'])
-        train_history['loss'].append(train_metrics['loss'])
-        test_history['accuracy'].append(test_metrics['accuracy'])
-        test_history['loss'].append(test_metrics['loss'])
-        
-        # Track regularization
-        has_reg = target_lambda is not None or (reg_scale is not None and reg_scale > 0)
-        if has_reg:
-            reg_tracker.record(epoch, train_metrics['reg_loss'], train_metrics['main_loss'])
-        
-        # Measure lambda
-        result = estimate_lambda_per_direction(
-            model, lambda_inputs, lambda_labels,
-            loss_fn_with_reduction_none,
-            max_order=MAX_ORDER,
-            K_dirs=K_DIRS
-        )
-        
-        if result['lambda_mean'] is not None:
-            tracker.record(epoch, result['lambda_mean'], result['lambda_std'])
-        
-        # Update progress bar
-        reg_ratio = train_metrics['reg_loss'] / train_metrics['main_loss'] if has_reg and train_metrics['main_loss'] > 0 else 0.0
-        
-        postfix = {
-            'Train': f"{train_metrics['accuracy']:.3f}",
-            'Test': f"{test_metrics['accuracy']:.3f}",
-            'λ': f"{result['lambda_mean']:.3f}" if result['lambda_mean'] is not None else "N/A",
-        }
-        if target_lambda is not None:
-            postfix['λ_tgt'] = f"{target_lambda:.2f}"
-        if has_reg:
-            postfix['Reg'] = f"{reg_ratio:.3f}"
-        epoch_pbar.set_postfix(postfix)
+    try:
+        for epoch in epoch_pbar:
+            # Train
+            train_metrics = train_epoch(
+                model, train_loader, optimizer,
+                F.cross_entropy, DEVICE, regularizer_fn
+            )
+            
+            # Evaluate
+            test_metrics = evaluate(model, test_loader, F.cross_entropy, DEVICE)
+            
+            # Store metrics
+            train_history['accuracy'].append(train_metrics['accuracy'])
+            train_history['loss'].append(train_metrics['loss'])
+            test_history['accuracy'].append(test_metrics['accuracy'])
+            test_history['loss'].append(test_metrics['loss'])
+            
+            # Track regularization
+            has_reg = target_lambda is not None or (reg_scale is not None and reg_scale > 0)
+            if has_reg:
+                reg_tracker.record(epoch, train_metrics['reg_loss'], train_metrics['main_loss'])
+            
+            # Measure lambda
+            result = estimate_lambda_per_direction(
+                model, lambda_inputs, lambda_labels,
+                loss_fn_with_reduction_none,
+                max_order=MAX_ORDER,
+                K_dirs=K_DIRS
+            )
+            
+            if result['lambda_mean'] is not None:
+                tracker.record(epoch, result['lambda_mean'], result['lambda_std'])
+            
+            # Update progress bar (single update per epoch)
+            reg_ratio = train_metrics['reg_loss'] / train_metrics['main_loss'] if has_reg and train_metrics['main_loss'] > 0 else 0.0
+            
+            postfix = {
+                'Train': f"{train_metrics['accuracy']:.3f}",
+                'Test': f"{test_metrics['accuracy']:.3f}",
+                'λ': f"{result['lambda_mean']:.3f}" if result['lambda_mean'] is not None else "N/A",
+            }
+            if target_lambda is not None:
+                postfix['λ_tgt'] = f"{target_lambda:.2f}"
+            if has_reg:
+                postfix['Reg'] = f"{reg_ratio:.3f}"
+            
+            epoch_pbar.set_postfix(postfix, refresh=True)
+    finally:
+        epoch_pbar.close()
     
     # Summary (suppressed for cleaner output, available in results.txt)
     # tracker.print_summary()
@@ -517,53 +525,60 @@ def experiment_3_cifar10_training(n_epochs=50, target_lambda=None, reg_scale=Non
     reg_label = f"λ_tgt={target_lambda:.2f}" if target_lambda is not None else f"reg={reg_scale}" if reg_scale else "no_reg"
     epoch_pbar = tqdm(range(1, n_epochs + 1), desc=f"CIFAR-10 ({reg_label})", 
                       position=1, leave=False,
+                      dynamic_ncols=True,
+                      mininterval=0.1,
+                      file=sys.stdout,
                       bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
     
-    for epoch in epoch_pbar:
-        # Train
-        train_metrics = train_epoch(
-            model, train_loader, optimizer,
-            F.cross_entropy, DEVICE, regularizer_fn
-        )
-        
-        # Evaluate
-        test_metrics = evaluate(model, test_loader, F.cross_entropy, DEVICE)
-        
-        # Store metrics
-        train_history['accuracy'].append(train_metrics['accuracy'])
-        train_history['loss'].append(train_metrics['loss'])
-        test_history['accuracy'].append(test_metrics['accuracy'])
-        test_history['loss'].append(test_metrics['loss'])
-        
-        # Track regularization
-        has_reg = target_lambda is not None or (reg_scale is not None and reg_scale > 0)
-        if has_reg:
-            reg_tracker.record(epoch, train_metrics['reg_loss'], train_metrics['main_loss'])
-        
-        # Measure lambda
-        result = estimate_lambda_per_direction(
-            model, lambda_inputs, lambda_labels,
-            loss_fn_with_reduction_none,
-            max_order=MAX_ORDER,
-            K_dirs=K_DIRS
-        )
-        
-        if result['lambda_mean'] is not None:
-            tracker.record(epoch, result['lambda_mean'], result['lambda_std'])
-        
-        # Update progress bar
-        reg_ratio = train_metrics['reg_loss'] / train_metrics['main_loss'] if has_reg and train_metrics['main_loss'] > 0 else 0.0
-        
-        postfix = {
-            'Train': f"{train_metrics['accuracy']:.3f}",
-            'Test': f"{test_metrics['accuracy']:.3f}",
-            'λ': f"{result['lambda_mean']:.3f}" if result['lambda_mean'] is not None else "N/A",
-        }
-        if target_lambda is not None:
-            postfix['λ_tgt'] = f"{target_lambda:.2f}"
-        if has_reg:
-            postfix['Reg'] = f"{reg_ratio:.3f}"
-        epoch_pbar.set_postfix(postfix)
+    try:
+        for epoch in epoch_pbar:
+            # Train
+            train_metrics = train_epoch(
+                model, train_loader, optimizer,
+                F.cross_entropy, DEVICE, regularizer_fn
+            )
+            
+            # Evaluate
+            test_metrics = evaluate(model, test_loader, F.cross_entropy, DEVICE)
+            
+            # Store metrics
+            train_history['accuracy'].append(train_metrics['accuracy'])
+            train_history['loss'].append(train_metrics['loss'])
+            test_history['accuracy'].append(test_metrics['accuracy'])
+            test_history['loss'].append(test_metrics['loss'])
+            
+            # Track regularization
+            has_reg = target_lambda is not None or (reg_scale is not None and reg_scale > 0)
+            if has_reg:
+                reg_tracker.record(epoch, train_metrics['reg_loss'], train_metrics['main_loss'])
+            
+            # Measure lambda
+            result = estimate_lambda_per_direction(
+                model, lambda_inputs, lambda_labels,
+                loss_fn_with_reduction_none,
+                max_order=MAX_ORDER,
+                K_dirs=K_DIRS
+            )
+            
+            if result['lambda_mean'] is not None:
+                tracker.record(epoch, result['lambda_mean'], result['lambda_std'])
+            
+            # Update progress bar (single update per epoch)
+            reg_ratio = train_metrics['reg_loss'] / train_metrics['main_loss'] if has_reg and train_metrics['main_loss'] > 0 else 0.0
+            
+            postfix = {
+                'Train': f"{train_metrics['accuracy']:.3f}",
+                'Test': f"{test_metrics['accuracy']:.3f}",
+                'λ': f"{result['lambda_mean']:.3f}" if result['lambda_mean'] is not None else "N/A",
+            }
+            if target_lambda is not None:
+                postfix['λ_tgt'] = f"{target_lambda:.2f}"
+            if has_reg:
+                postfix['Reg'] = f"{reg_ratio:.3f}"
+            
+            epoch_pbar.set_postfix(postfix, refresh=True)
+    finally:
+        epoch_pbar.close()
     
     # Summary (suppressed for cleaner output, available in results.txt)
     # tracker.print_summary()
@@ -658,9 +673,12 @@ def main():
     if target_lambdas is not None:
         # Target lambda mode
         reg_pbar = tqdm(target_lambdas, desc="Target Lambdas", position=0, leave=True, 
+                        dynamic_ncols=True,
+                        mininterval=0.5,
+                        file=sys.stdout,
                         bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
         for target_lambda in reg_pbar:
-            reg_pbar.set_description(f"Target λ: {target_lambda:.2f}")
+            reg_pbar.set_description(f"Target λ: {target_lambda:.2f}", refresh=False)
             mnist_results = experiment_2_mnist_training(n_epochs=args.epochs, target_lambda=target_lambda)
             cifar_results = experiment_3_cifar10_training(n_epochs=args.epochs, target_lambda=target_lambda)
             
@@ -669,9 +687,12 @@ def main():
     else:
         # Legacy reg scale mode
         reg_pbar = tqdm(reg_scales, desc="Reg Scales", position=0, leave=True, 
+                        dynamic_ncols=True,
+                        mininterval=0.5,
+                        file=sys.stdout,
                         bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
         for reg_scale in reg_pbar:
-            reg_pbar.set_description(f"Reg Scale: {reg_scale}")
+            reg_pbar.set_description(f"Reg Scale: {reg_scale}", refresh=False)
             mnist_results = experiment_2_mnist_training(n_epochs=args.epochs, reg_scale=reg_scale)
             cifar_results = experiment_3_cifar10_training(n_epochs=args.epochs, reg_scale=reg_scale)
             
