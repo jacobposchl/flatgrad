@@ -45,7 +45,7 @@ def plot_lambda_evolution(
         from pathlib import Path
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
+        # Plot saved (suppress print for cleaner output)
     else:
         # Save to results/proof_of_concept by default
         from pathlib import Path
@@ -98,7 +98,7 @@ def plot_derivative_profile(
         from pathlib import Path
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
+        # Plot saved (suppress print for cleaner output)
     
     plt.close()
 
@@ -158,7 +158,7 @@ def plot_cross_dataset_comparison(
         from pathlib import Path
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
+        # Plot saved (suppress print for cleaner output)
     else:
         # Save to results/proof_of_concept by default
         from pathlib import Path
@@ -219,7 +219,7 @@ def plot_lambda_distribution(
         from pathlib import Path
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
+        # Plot saved (suppress print for cleaner output)
     else:
         # Save to results/proof_of_concept by default
         from pathlib import Path

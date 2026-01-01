@@ -21,14 +21,15 @@ import numpy as np
 import random
 from pathlib import Path
 import sys
+from tqdm import tqdm
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from flatgrad.sampling.vision_models import create_vision_model
 from flatgrad.sampling.lambda_estimation import estimate_lambda_per_direction
-from flatgrad.sampling.training import train_epoch, evaluate, LambdaTracker
-from flatgrad.sampling.regularizers import compute_lambda_regularizer
+from flatgrad.sampling.training import train_epoch, evaluate, LambdaTracker, RegTracker
+from flatgrad.sampling.regularizers import compute_lambda_regularizer, compute_lambda_target_regularizer
 from helpers.visualization import (
     plot_lambda_evolution, 
     plot_derivative_profile,
@@ -37,7 +38,9 @@ from helpers.visualization import (
 )
 from helpers.reg_comparison_plots import (
     plot_lambda_evolution_multi_reg,
-    plot_all_metrics_vs_reg_scale
+    plot_all_metrics_vs_reg_scale,
+    plot_reg_magnitude_evolution,
+    plot_reg_magnitude_vs_scale
 )
 
 
@@ -62,12 +65,14 @@ def loss_fn_with_reduction_none(logits, labels, reduction='none'):
     return F.cross_entropy(logits, labels, reduction=reduction)
 
 
-def save_results_to_file(mnist_results, cifar_results, n_epochs):
-    """Save comprehensive results to text file."""
+def save_results_to_file(mnist_results_by_reg, cifar_results_by_reg, n_epochs):
+    """Save comprehensive results to text file for all regularization scales."""
     from pathlib import Path
     output_dir = Path('results/proof_of_concept')
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / 'results.txt'
+    
+    reg_scales = sorted(mnist_results_by_reg.keys())
     
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write("="*80 + "\n")
@@ -75,110 +80,159 @@ def save_results_to_file(mnist_results, cifar_results, n_epochs):
         f.write("="*80 + "\n\n")
         f.write(f"Training Epochs: {n_epochs}\n")
         f.write(f"K_dirs (directions): {K_DIRS}\n")
-        f.write(f"Max derivative order: {MAX_ORDER}\n\n")
+        f.write(f"Max derivative order: {MAX_ORDER}\n")
+        f.write(f"Regularization scales tested: {reg_scales}\n\n")
         
-        # MNIST Results
+        # Summary table across all reg scales
         f.write("="*80 + "\n")
-        f.write("MNIST RESULTS\n")
+        f.write("SUMMARY ACROSS REGULARIZATION SCALES\n")
         f.write("="*80 + "\n\n")
         
-        # Lambda statistics
-        f.write("--- Lambda (\u03bb) Statistics ---\n")
-        lambda_hist = mnist_results['tracker'].get_history()
-        if len(lambda_hist['epochs']) > 0:
-            initial_lambda = lambda_hist['lambda_means'][0]
-            final_lambda = lambda_hist['lambda_means'][-1]
-            lambda_change = ((final_lambda - initial_lambda) / abs(initial_lambda)) * 100 if initial_lambda != 0 else 0
-            
-            f.write(f"  Initial \u03bb (epoch 0):  {initial_lambda:.6f} \u00b1 {lambda_hist['lambda_stds'][0]:.6f}\n")
-            f.write(f"  Final \u03bb (epoch {n_epochs}):   {final_lambda:.6f} \u00b1 {lambda_hist['lambda_stds'][-1]:.6f}\n")
-            f.write(f"  Change:              {lambda_change:+.2f}%\n")
-            f.write(f"  Mean across training: {np.mean(lambda_hist['lambda_means']):.6f}\n")
-            f.write(f"  Std across training:  {np.std(lambda_hist['lambda_means']):.6f}\n")
-            f.write("  No valid lambda measurements\n")
+        f.write("MNIST Summary:\n")
+        f.write(f"{'Reg Scale':<12} {'Test Acc':<12} {'Gen Gap':<12} {'Test ECE':<12} {'Final λ':<15} {'Mean Reg Ratio':<15}\n")
+        f.write("-"*80 + "\n")
+        for reg_scale in reg_scales:
+            mnist_results = mnist_results_by_reg[reg_scale]
+            test_acc = mnist_results['final_test']['accuracy']
+            gen_gap = mnist_results['final_train']['accuracy'] - mnist_results['final_test']['accuracy']
+            test_ece = mnist_results['final_test'].get('ece', 0.0)
+            lambda_hist = mnist_results['tracker'].get_history()
+            final_lambda = lambda_hist['lambda_means'][-1] if len(lambda_hist['lambda_means']) > 0 else 0.0
+            reg_ratio = 0.0
+            if mnist_results.get('reg_tracker') is not None:
+                reg_hist = mnist_results['reg_tracker'].get_history()
+                if len(reg_hist['reg_ratios']) > 0:
+                    reg_ratio = np.mean(reg_hist['reg_ratios'])
+            f.write(f"{reg_scale:<12.3f} {test_acc:<12.4f} {gen_gap:<12.4f} {test_ece:<12.6f} {final_lambda:<15.6f} {reg_ratio:<15.6f}\n")
         f.write("\n")
         
-        # Accuracy statistics
-        f.write("--- Accuracy Statistics ---\n")
-        if len(mnist_results['train_history']['accuracy']) > 0:
-            f.write(f"  Initial Train Acc:  {mnist_results['train_history']['accuracy'][0]:.4f}\n")
-            f.write(f"  Final Train Acc:    {mnist_results['final_train']['accuracy']:.4f}\n")
-            f.write(f"  Final Test Acc:     {mnist_results['final_test']['accuracy']:.4f}\n")
-            f.write(f"  Generalization Gap: {(mnist_results['final_train']['accuracy'] - mnist_results['final_test']['accuracy']):.4f}\n")
-        f.write("\n")
-        
-        # ECE
-        f.write("--- Calibration (ECE) ---\n")
-        if 'ece' in mnist_results['final_test']:
-            f.write(f"  Test ECE:  {mnist_results['final_test']['ece']:.6f}\n")
-            f.write(f"  Train ECE: {mnist_results['final_train']['ece']:.6f}\n")
-        f.write("\n")
-        
-        # Training progression
-        f.write("--- Training Progression ---\n")
-        f.write("  Epoch | Train Acc | Test Acc  | Train Loss | Test Loss\n")
-        f.write("  " + "-"*60 + "\n")
-        for i in range(len(mnist_results['train_history']['accuracy'])):
-            f.write(f"  {i+1:5d} | {mnist_results['train_history']['accuracy'][i]:.6f} | "
-                   f"{mnist_results['test_history']['accuracy'][i]:.6f} | "
-                   f"{mnist_results['train_history']['loss'][i]:.6f} | "
-                   f"{mnist_results['test_history']['loss'][i]:.6f}\n")
+        f.write("CIFAR-10 Summary:\n")
+        f.write(f"{'Reg Scale':<12} {'Test Acc':<12} {'Gen Gap':<12} {'Test ECE':<12} {'Final λ':<15} {'Mean Reg Ratio':<15}\n")
+        f.write("-"*80 + "\n")
+        for reg_scale in reg_scales:
+            cifar_results = cifar_results_by_reg[reg_scale]
+            test_acc = cifar_results['final_test']['accuracy']
+            gen_gap = cifar_results['final_train']['accuracy'] - cifar_results['final_test']['accuracy']
+            test_ece = cifar_results['final_test'].get('ece', 0.0)
+            lambda_hist = cifar_results['tracker'].get_history()
+            final_lambda = lambda_hist['lambda_means'][-1] if len(lambda_hist['lambda_means']) > 0 else 0.0
+            reg_ratio = 0.0
+            if cifar_results.get('reg_tracker') is not None:
+                reg_hist = cifar_results['reg_tracker'].get_history()
+                if len(reg_hist['reg_ratios']) > 0:
+                    reg_ratio = np.mean(reg_hist['reg_ratios'])
+            f.write(f"{reg_scale:<12.3f} {test_acc:<12.4f} {gen_gap:<12.4f} {test_ece:<12.6f} {final_lambda:<15.6f} {reg_ratio:<15.6f}\n")
         f.write("\n\n")
         
-        # CIFAR-10 Results
-        f.write("="*80 + "\n")
-        f.write("CIFAR-10 RESULTS\n")
-        f.write("="*80 + "\n\n")
-        
-        # Lambda statistics
-        f.write("--- Lambda (\u03bb) Statistics ---\n")
-        lambda_hist = cifar_results['tracker'].get_history()
-        if len(lambda_hist['epochs']) > 0:
-            initial_lambda = lambda_hist['lambda_means'][0]
-            final_lambda = lambda_hist['lambda_means'][-1]
-            lambda_change = ((final_lambda - initial_lambda) / abs(initial_lambda)) * 100 if initial_lambda != 0 else 0
+        # Detailed results for each reg scale
+        for reg_scale in reg_scales:
+            mnist_results = mnist_results_by_reg[reg_scale]
+            cifar_results = cifar_results_by_reg[reg_scale]
             
-            f.write(f"  Initial \u03bb (epoch 0):  {initial_lambda:.6f} \u00b1 {lambda_hist['lambda_stds'][0]:.6f}\n")
-            f.write(f"  Final \u03bb (epoch {n_epochs}):   {final_lambda:.6f} \u00b1 {lambda_hist['lambda_stds'][-1]:.6f}\n")
-            f.write(f"  Change:              {lambda_change:+.2f}%\n")
-            f.write(f"  Mean across training: {np.mean(lambda_hist['lambda_means']):.6f}\n")
-            f.write(f"  Std across training:  {np.std(lambda_hist['lambda_means']):.6f}\n")
-        else:
-            f.write("  No valid lambda measurements\n")
-        f.write("\n")
+            f.write("="*80 + "\n")
+            f.write(f"REGULARIZATION SCALE: {reg_scale}\n")
+            f.write("="*80 + "\n\n")
+            
+            # MNIST Results
+            f.write("--- MNIST RESULTS ---\n\n")
+            
+            # Lambda statistics
+            f.write("Lambda (λ) Statistics:\n")
+            lambda_hist = mnist_results['tracker'].get_history()
+            if len(lambda_hist['epochs']) > 0:
+                initial_lambda = lambda_hist['lambda_means'][0]
+                final_lambda = lambda_hist['lambda_means'][-1]
+                lambda_change = ((final_lambda - initial_lambda) / abs(initial_lambda)) * 100 if initial_lambda != 0 else 0
+                
+                f.write(f"  Initial λ (epoch 0):  {initial_lambda:.6f} ± {lambda_hist['lambda_stds'][0]:.6f}\n")
+                f.write(f"  Final λ (epoch {n_epochs}):   {final_lambda:.6f} ± {lambda_hist['lambda_stds'][-1]:.6f}\n")
+                f.write(f"  Change:              {lambda_change:+.2f}%\n")
+                f.write(f"  Mean across training: {np.mean(lambda_hist['lambda_means']):.6f}\n")
+                f.write(f"  Std across training:  {np.std(lambda_hist['lambda_means']):.6f}\n")
+            else:
+                f.write("  No valid lambda measurements\n")
+            f.write("\n")
+            
+            # Regularization statistics
+            if mnist_results.get('reg_tracker') is not None:
+                f.write("Regularization Statistics:\n")
+                reg_hist = mnist_results['reg_tracker'].get_history()
+                if len(reg_hist['epochs']) > 0:
+                    f.write(f"  Mean Reg Loss: {np.mean(reg_hist['reg_losses']):.6f}\n")
+                    f.write(f"  Mean Main Loss: {np.mean(reg_hist['main_losses']):.6f}\n")
+                    f.write(f"  Mean Reg Ratio: {np.mean(reg_hist['reg_ratios']):.6f}\n")
+                    f.write(f"  Max Reg Ratio: {np.max(reg_hist['reg_ratios']):.6f}\n")
+                f.write("\n")
+            
+            # Accuracy statistics
+            f.write("Accuracy Statistics:\n")
+            if len(mnist_results['train_history']['accuracy']) > 0:
+                f.write(f"  Initial Train Acc:  {mnist_results['train_history']['accuracy'][0]:.4f}\n")
+                f.write(f"  Final Train Acc:    {mnist_results['final_train']['accuracy']:.4f}\n")
+                f.write(f"  Final Test Acc:     {mnist_results['final_test']['accuracy']:.4f}\n")
+                f.write(f"  Generalization Gap: {(mnist_results['final_train']['accuracy'] - mnist_results['final_test']['accuracy']):.4f}\n")
+            f.write("\n")
+            
+            # ECE
+            f.write("Calibration (ECE):\n")
+            if 'ece' in mnist_results['final_test']:
+                f.write(f"  Test ECE:  {mnist_results['final_test']['ece']:.6f}\n")
+                f.write(f"  Train ECE: {mnist_results['final_train']['ece']:.6f}\n")
+            f.write("\n")
+            
+            # CIFAR-10 Results
+            f.write("--- CIFAR-10 RESULTS ---\n\n")
+            
+            # Lambda statistics
+            f.write("Lambda (λ) Statistics:\n")
+            lambda_hist = cifar_results['tracker'].get_history()
+            if len(lambda_hist['epochs']) > 0:
+                initial_lambda = lambda_hist['lambda_means'][0]
+                final_lambda = lambda_hist['lambda_means'][-1]
+                lambda_change = ((final_lambda - initial_lambda) / abs(initial_lambda)) * 100 if initial_lambda != 0 else 0
+                
+                f.write(f"  Initial λ (epoch 0):  {initial_lambda:.6f} ± {lambda_hist['lambda_stds'][0]:.6f}\n")
+                f.write(f"  Final λ (epoch {n_epochs}):   {final_lambda:.6f} ± {lambda_hist['lambda_stds'][-1]:.6f}\n")
+                f.write(f"  Change:              {lambda_change:+.2f}%\n")
+                f.write(f"  Mean across training: {np.mean(lambda_hist['lambda_means']):.6f}\n")
+                f.write(f"  Std across training:  {np.std(lambda_hist['lambda_means']):.6f}\n")
+            else:
+                f.write("  No valid lambda measurements\n")
+            f.write("\n")
+            
+            # Regularization statistics
+            if cifar_results.get('reg_tracker') is not None:
+                f.write("Regularization Statistics:\n")
+                reg_hist = cifar_results['reg_tracker'].get_history()
+                if len(reg_hist['epochs']) > 0:
+                    f.write(f"  Mean Reg Loss: {np.mean(reg_hist['reg_losses']):.6f}\n")
+                    f.write(f"  Mean Main Loss: {np.mean(reg_hist['main_losses']):.6f}\n")
+                    f.write(f"  Mean Reg Ratio: {np.mean(reg_hist['reg_ratios']):.6f}\n")
+                    f.write(f"  Max Reg Ratio: {np.max(reg_hist['reg_ratios']):.6f}\n")
+                f.write("\n")
+            
+            # Accuracy statistics
+            f.write("Accuracy Statistics:\n")
+            if len(cifar_results['train_history']['accuracy']) > 0:
+                f.write(f"  Initial Train Acc:  {cifar_results['train_history']['accuracy'][0]:.4f}\n")
+                f.write(f"  Final Train Acc:    {cifar_results['final_train']['accuracy']:.4f}\n")
+                f.write(f"  Final Test Acc:     {cifar_results['final_test']['accuracy']:.4f}\n")
+                f.write(f"  Generalization Gap: {(cifar_results['final_train']['accuracy'] - cifar_results['final_test']['accuracy']):.4f}\n")
+            f.write("\n")
+            
+            # ECE
+            f.write("Calibration (ECE):\n")
+            if 'ece' in cifar_results['final_test']:
+                f.write(f"  Test ECE:  {cifar_results['final_test']['ece']:.6f}\n")
+                f.write(f"  Train ECE: {cifar_results['final_train']['ece']:.6f}\n")
+            f.write("\n\n")
         
-        # Accuracy statistics
-        f.write("--- Accuracy Statistics ---\n")
-        if len(cifar_results['train_history']['accuracy']) > 0:
-            f.write(f"  Initial Train Acc:  {cifar_results['train_history']['accuracy'][0]:.4f}\n")
-            f.write(f"  Final Train Acc:    {cifar_results['final_train']['accuracy']:.4f}\n")
-            f.write(f"  Final Test Acc:     {cifar_results['final_test']['accuracy']:.4f}\n")
-            f.write(f"  Generalization Gap: {(cifar_results['final_train']['accuracy'] - cifar_results['final_test']['accuracy']):.4f}\n")
-        f.write("\n")
-        
-        # ECE
-        f.write("--- Calibration (ECE) ---\n")
-        if 'ece' in cifar_results['final_test']:
-            f.write(f"  Test ECE:  {cifar_results['final_test']['ece']:.6f}\n")
-            f.write(f"  Train ECE: {cifar_results['final_train']['ece']:.6f}\n")
-        f.write("\n")
-        
-        # Training progression
-        f.write("--- Training Progression ---\n")
-        f.write("  Epoch | Train Acc | Test Acc  | Train Loss | Test Loss\n")
-        f.write("  " + "-"*60 + "\n")
-        for i in range(len(cifar_results['train_history']['accuracy'])):
-            f.write(f"  {i+1:5d} | {cifar_results['train_history']['accuracy'][i]:.6f} | "
-                   f"{cifar_results['test_history']['accuracy'][i]:.6f} | "
-                   f"{cifar_results['train_history']['loss'][i]:.6f} | "
-                   f"{cifar_results['test_history']['loss'][i]:.6f}\n")
-        f.write("\n")
         f.write("="*80 + "\n")
     
-    print(f"\nSaved comprehensive results to {output_path}")
+    # Results saved (suppress print for cleaner output)
 
 
-def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
+def experiment_2_mnist_training(n_epochs=50, target_lambda=None, reg_scale=None):
     """
     Experiment: Measure λ during MNIST training.
     
@@ -186,12 +240,11 @@ def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
     if it stabilizes or changes systematically during training.
     
     Args:
-        n_epochs: Number of training epochs (default: 20)
-        reg_scale: Lambda regularization scale (default: 1.0, 0 disables)
+        n_epochs: Number of training epochs (default: 50)
+        target_lambda: Target lambda value to regularize towards (None disables)
+        reg_scale: Lambda regularization scale (deprecated, use target_lambda instead)
     """
-    print("\n" + "="*80)
-    print("EXPERIMENT 1: MNIST Lambda Tracking During Training")
-    print("="*80)
+    # Experiment header (minimal output)
     
     set_seed(SEED)
     
@@ -224,9 +277,18 @@ def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
     model = create_vision_model('mnist', dropout_rate=0.5).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
-    # Create regularizer function if scale > 0
+    # Create regularizer function
     regularizer_fn = None
-    if reg_scale > 0:
+    if target_lambda is not None:
+        # Use target lambda regularizer
+        def regularizer_fn(model, inputs, labels, loss_fn):
+            return compute_lambda_target_regularizer(
+                model, inputs, labels, loss_fn,
+                target_lambda=target_lambda,
+                max_order=MAX_ORDER, K_dirs=K_DIRS, scale=1.0
+            )
+    elif reg_scale is not None and reg_scale > 0:
+        # Legacy: use old regularizer for backward compatibility
         def regularizer_fn(model, inputs, labels, loss_fn):
             return compute_lambda_regularizer(
                 model, inputs, labels, loss_fn,
@@ -236,12 +298,14 @@ def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
     # Track lambda
     tracker = LambdaTracker()
     
+    # Track regularization
+    reg_tracker = RegTracker()
+    
     # Track training metrics
     train_history = {'accuracy': [], 'loss': []}
     test_history = {'accuracy': [], 'loss': []}
     
     # Measure initial lambda
-    print("\nMeasuring initial lambda (before training)...")
     result = estimate_lambda_per_direction(
         model, lambda_inputs, lambda_labels,
         loss_fn_with_reduction_none,
@@ -250,22 +314,23 @@ def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
     )
     if result['lambda_mean'] is not None:
         tracker.record(0, result['lambda_mean'], result['lambda_std'])
-        print(f"  Epoch 0: λ = {result['lambda_mean']:.4f} ± {result['lambda_std']:.4f}")
         # Save initial lambda distribution
         if len(result['lambda_values']) > 0:
+            reg_label = f"target_{target_lambda:.2f}" if target_lambda is not None else f"reg_{reg_scale}" if reg_scale else "no_reg"
             plot_lambda_distribution(
                 result['lambda_values'],
                 title="MNIST: Lambda Distribution Across Directions (Epoch 0)",
-                save_path=f"results/proof_of_concept/mnist/direction_distribution/reg_{reg_scale}_epoch0.png",
-                reg_scale=reg_scale
+                save_path=f"results/proof_of_concept/mnist/direction_distribution/{reg_label}_epoch0.png",
+                reg_scale=target_lambda if target_lambda is not None else reg_scale
             )
-    else:
-        print(f"  Epoch 0: ⚠ Lambda estimation failed (valid directions: {result['n_valid_directions']}/{K_DIRS})")
     
-    # Training loop
-    print(f"\nTraining for {n_epochs} epochs...")
+    # Training loop with progress bar
+    reg_label = f"λ_tgt={target_lambda:.2f}" if target_lambda is not None else f"reg={reg_scale}" if reg_scale else "no_reg"
+    epoch_pbar = tqdm(range(1, n_epochs + 1), desc=f"MNIST ({reg_label})", 
+                      position=1, leave=False,
+                      bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
     
-    for epoch in range(1, n_epochs + 1):
+    for epoch in epoch_pbar:
         # Train
         train_metrics = train_epoch(
             model, train_loader, optimizer,
@@ -281,6 +346,11 @@ def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
         test_history['accuracy'].append(test_metrics['accuracy'])
         test_history['loss'].append(test_metrics['loss'])
         
+        # Track regularization
+        has_reg = target_lambda is not None or (reg_scale is not None and reg_scale > 0)
+        if has_reg:
+            reg_tracker.record(epoch, train_metrics['reg_loss'], train_metrics['main_loss'])
+        
         # Measure lambda
         result = estimate_lambda_per_direction(
             model, lambda_inputs, lambda_labels,
@@ -291,18 +361,27 @@ def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
         
         if result['lambda_mean'] is not None:
             tracker.record(epoch, result['lambda_mean'], result['lambda_std'])
-            print(f"  Epoch {epoch}: "
-                  f"Train Acc={train_metrics['accuracy']:.3f}, "
-                  f"Test Acc={test_metrics['accuracy']:.3f}, "
-                  f"λ={result['lambda_mean']:.4f}±{result['lambda_std']:.4f}")
-        else:
-            print(f"  Epoch {epoch}: "
-                  f"Train Acc={train_metrics['accuracy']:.3f}, "
-                  f"Test Acc={test_metrics['accuracy']:.3f}, "
-                  f"λ=N/A (failed, valid: {result['n_valid_directions']}/{K_DIRS})")
+        
+        # Update progress bar
+        reg_ratio = train_metrics['reg_loss'] / train_metrics['main_loss'] if has_reg and train_metrics['main_loss'] > 0 else 0.0
+        
+        postfix = {
+            'Train': f"{train_metrics['accuracy']:.3f}",
+            'Test': f"{test_metrics['accuracy']:.3f}",
+            'λ': f"{result['lambda_mean']:.3f}" if result['lambda_mean'] is not None else "N/A",
+        }
+        if target_lambda is not None:
+            postfix['λ_tgt'] = f"{target_lambda:.2f}"
+        if has_reg:
+            postfix['Reg'] = f"{reg_ratio:.3f}"
+        epoch_pbar.set_postfix(postfix)
     
-    # Summary
-    tracker.print_summary()
+    # Summary (suppressed for cleaner output, available in results.txt)
+    # tracker.print_summary()
+    # if reg_scale > 0:
+    #     reg_tracker.print_summary()
+    
+    epoch_pbar.close()  # Close progress bar before final operations
     
     # Compute final metrics with ECE
     final_test_metrics = evaluate(model, test_loader, F.cross_entropy, DEVICE, compute_calibration=True)
@@ -316,11 +395,12 @@ def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
         K_dirs=K_DIRS
     )
     if len(final_result['lambda_values']) > 0:
+        reg_label = f"target_{target_lambda:.2f}" if target_lambda is not None else f"reg_{reg_scale}" if reg_scale else "no_reg"
         plot_lambda_distribution(
             final_result['lambda_values'],
             title=f"MNIST: Lambda Distribution Across Directions (Epoch {n_epochs})",
-            save_path=f"results/proof_of_concept/mnist/direction_distribution/reg_{reg_scale}_final.png",
-            reg_scale=reg_scale
+            save_path=f"results/proof_of_concept/mnist/direction_distribution/{reg_label}_final.png",
+            reg_scale=target_lambda if target_lambda is not None else reg_scale
         )
     
     # Visualize
@@ -332,14 +412,16 @@ def experiment_2_mnist_training(n_epochs=20, reg_scale=1.0):
     
     return {
         'tracker': tracker,
+        'reg_tracker': reg_tracker if (target_lambda is not None or (reg_scale is not None and reg_scale > 0)) else None,
         'train_history': train_history,
         'test_history': test_history,
         'final_train': final_train_metrics,
-        'final_test': final_test_metrics
+        'final_test': final_test_metrics,
+        'reg_scale': reg_scale
     }
 
 
-def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
+def experiment_3_cifar10_training(n_epochs=50, target_lambda=None, reg_scale=None):
     """
     Experiment 2: Track lambda evolution during CIFAR-10 training.
     
@@ -347,12 +429,11 @@ def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
     testing whether lambda remains measurable in more complex scenarios.
     
     Args:
-        n_epochs: Number of training epochs (default: 20)
-        reg_scale: Lambda regularization scale (default: 1.0, 0 disables)
+        n_epochs: Number of training epochs (default: 50)
+        target_lambda: Target lambda value to regularize towards (None disables)
+        reg_scale: Lambda regularization scale (deprecated, use target_lambda instead)
     """
-    print("\n" + "="*80)
-    print("EXPERIMENT 2: CIFAR-10 Lambda Tracking During Training")
-    print("="*80)
+    # Experiment header (minimal output)
     
     set_seed(SEED)
     
@@ -385,9 +466,18 @@ def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
     model = create_vision_model('cifar10', dropout_rate=0.5).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
-    # Create regularizer function if scale > 0
+    # Create regularizer function
     regularizer_fn = None
-    if reg_scale > 0:
+    if target_lambda is not None:
+        # Use target lambda regularizer
+        def regularizer_fn(model, inputs, labels, loss_fn):
+            return compute_lambda_target_regularizer(
+                model, inputs, labels, loss_fn,
+                target_lambda=target_lambda,
+                max_order=MAX_ORDER, K_dirs=K_DIRS, scale=1.0
+            )
+    elif reg_scale is not None and reg_scale > 0:
+        # Legacy: use old regularizer for backward compatibility
         def regularizer_fn(model, inputs, labels, loss_fn):
             return compute_lambda_regularizer(
                 model, inputs, labels, loss_fn,
@@ -397,12 +487,14 @@ def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
     # Track lambda
     tracker = LambdaTracker()
     
+    # Track regularization
+    reg_tracker = RegTracker()
+    
     # Track training metrics
     train_history = {'accuracy': [], 'loss': []}
     test_history = {'accuracy': [], 'loss': []}
     
     # Measure initial lambda
-    print("\nMeasuring initial lambda (before training)...")
     result = estimate_lambda_per_direction(
         model, lambda_inputs, lambda_labels,
         loss_fn_with_reduction_none,
@@ -411,22 +503,23 @@ def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
     )
     if result['lambda_mean'] is not None:
         tracker.record(0, result['lambda_mean'], result['lambda_std'])
-        print(f"  Epoch 0: λ = {result['lambda_mean']:.4f} ± {result['lambda_std']:.4f}")
         # Save initial lambda distribution
         if len(result['lambda_values']) > 0:
+            reg_label = f"target_{target_lambda:.2f}" if target_lambda is not None else f"reg_{reg_scale}" if reg_scale else "no_reg"
             plot_lambda_distribution(
                 result['lambda_values'],
                 title="CIFAR-10: Lambda Distribution Across Directions (Epoch 0)",
-                save_path=f"results/proof_of_concept/cifar10/direction_distribution/reg_{reg_scale}_epoch0.png",
-                reg_scale=reg_scale
+                save_path=f"results/proof_of_concept/cifar10/direction_distribution/{reg_label}_epoch0.png",
+                reg_scale=target_lambda if target_lambda is not None else reg_scale
             )
-    else:
-        print(f"  Epoch 0: ⚠ Lambda estimation failed (valid directions: {result['n_valid_directions']}/{K_DIRS})")
     
-    # Training loop
-    print(f"\nTraining for {n_epochs} epochs...")
+    # Training loop with progress bar
+    reg_label = f"λ_tgt={target_lambda:.2f}" if target_lambda is not None else f"reg={reg_scale}" if reg_scale else "no_reg"
+    epoch_pbar = tqdm(range(1, n_epochs + 1), desc=f"CIFAR-10 ({reg_label})", 
+                      position=1, leave=False,
+                      bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
     
-    for epoch in range(1, n_epochs + 1):
+    for epoch in epoch_pbar:
         # Train
         train_metrics = train_epoch(
             model, train_loader, optimizer,
@@ -442,6 +535,11 @@ def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
         test_history['accuracy'].append(test_metrics['accuracy'])
         test_history['loss'].append(test_metrics['loss'])
         
+        # Track regularization
+        has_reg = target_lambda is not None or (reg_scale is not None and reg_scale > 0)
+        if has_reg:
+            reg_tracker.record(epoch, train_metrics['reg_loss'], train_metrics['main_loss'])
+        
         # Measure lambda
         result = estimate_lambda_per_direction(
             model, lambda_inputs, lambda_labels,
@@ -452,18 +550,27 @@ def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
         
         if result['lambda_mean'] is not None:
             tracker.record(epoch, result['lambda_mean'], result['lambda_std'])
-            print(f"  Epoch {epoch}: "
-                  f"Train Acc={train_metrics['accuracy']:.3f}, "
-                  f"Test Acc={test_metrics['accuracy']:.3f}, "
-                  f"λ={result['lambda_mean']:.4f}±{result['lambda_std']:.4f}")
-        else:
-            print(f"  Epoch {epoch}: "
-                  f"Train Acc={train_metrics['accuracy']:.3f}, "
-                  f"Test Acc={test_metrics['accuracy']:.3f}, "
-                  f"λ=N/A (failed, valid: {result['n_valid_directions']}/{K_DIRS})")
+        
+        # Update progress bar
+        reg_ratio = train_metrics['reg_loss'] / train_metrics['main_loss'] if has_reg and train_metrics['main_loss'] > 0 else 0.0
+        
+        postfix = {
+            'Train': f"{train_metrics['accuracy']:.3f}",
+            'Test': f"{test_metrics['accuracy']:.3f}",
+            'λ': f"{result['lambda_mean']:.3f}" if result['lambda_mean'] is not None else "N/A",
+        }
+        if target_lambda is not None:
+            postfix['λ_tgt'] = f"{target_lambda:.2f}"
+        if has_reg:
+            postfix['Reg'] = f"{reg_ratio:.3f}"
+        epoch_pbar.set_postfix(postfix)
     
-    # Summary
-    tracker.print_summary()
+    # Summary (suppressed for cleaner output, available in results.txt)
+    # tracker.print_summary()
+    # if reg_scale > 0:
+    #     reg_tracker.print_summary()
+    
+    epoch_pbar.close()  # Close progress bar before final operations
     
     # Compute final metrics with ECE
     final_test_metrics = evaluate(model, test_loader, F.cross_entropy, DEVICE, compute_calibration=True)
@@ -477,11 +584,12 @@ def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
         K_dirs=K_DIRS
     )
     if len(final_result['lambda_values']) > 0:
+        reg_label = f"target_{target_lambda:.2f}" if target_lambda is not None else f"reg_{reg_scale}" if reg_scale else "no_reg"
         plot_lambda_distribution(
             final_result['lambda_values'],
             title=f"CIFAR-10: Lambda Distribution Across Directions (Epoch {n_epochs})",
-            save_path=f"results/proof_of_concept/cifar10/direction_distribution/reg_{reg_scale}_final.png",
-            reg_scale=reg_scale
+            save_path=f"results/proof_of_concept/cifar10/direction_distribution/{reg_label}_final.png",
+            reg_scale=target_lambda if target_lambda is not None else reg_scale
         )
     
     # Visualize
@@ -493,60 +601,91 @@ def experiment_3_cifar10_training(n_epochs=20, reg_scale=1.0):
     
     return {
         'tracker': tracker,
+        'reg_tracker': reg_tracker if (target_lambda is not None or (reg_scale is not None and reg_scale > 0)) else None,
         'train_history': train_history,
         'test_history': test_history,
         'final_train': final_train_metrics,
-        'final_test': final_test_metrics
+        'final_test': final_test_metrics,
+        'reg_scale': reg_scale
     }
 
 
 def main():
     """Run all proof of concept experiments."""
     parser = argparse.ArgumentParser(description='Proof of Concept: Lambda Measurability')
-    parser.add_argument('--epochs', type=int, default=20,
-                       help='Number of training epochs (default: 20)')
-    parser.add_argument('--reg-scale', type=float, nargs='+', default=[0.0, 0.001, 0.01, 0.1, 1.0],
-                       help='Lambda regularization scales to test (default: [0.0, 0.001, 0.01, 0.1, 1.0])')
+    parser.add_argument('--epochs', type=int, default=50,
+                       help='Number of training epochs (default: 50)')
+    parser.add_argument('--target-lambda', type=float, nargs='+', default=None,
+                       help='Target lambda values to test (e.g., --target-lambda -2.0 -1.5 -1.0 -0.5 0.0)')
+    parser.add_argument('--reg-scale', type=float, nargs='+', default=None,
+                       help='Legacy: Lambda regularization scales to test (deprecated, use --target-lambda)')
     args = parser.parse_args()
     
-    # Convert single value to list if needed
-    reg_scales = args.reg_scale if isinstance(args.reg_scale, list) else [args.reg_scale]
+    # Determine which mode to use
+    if args.target_lambda is not None:
+        # New mode: target lambda grid search
+        target_lambdas = args.target_lambda if isinstance(args.target_lambda, list) else [args.target_lambda]
+        reg_scales = None
+        print("\n" + "="*80)
+        print("PROOF OF CONCEPT: Lambda Target Regularization")
+        print("="*80)
+        print(f"Device: {DEVICE} | Epochs: {args.epochs} | Target Lambdas: {target_lambdas}")
+        print("="*80 + "\n")
+    elif args.reg_scale is not None:
+        # Legacy mode: reg scale grid search
+        reg_scales = args.reg_scale if isinstance(args.reg_scale, list) else [args.reg_scale]
+        target_lambdas = None
+        print("\n" + "="*80)
+        print("PROOF OF CONCEPT: Lambda Measurability in Neural Networks")
+        print("="*80)
+        print(f"Device: {DEVICE} | Epochs: {args.epochs} | Reg Scales: {reg_scales}")
+        print("="*80 + "\n")
+    else:
+        # Default: use target lambda grid
+        
+        target_lambdas = [-4.0, -2.0, -1.0, 0, 1.0, 2.0, 4.0]
+        reg_scales = None
+        print("\n" + "="*80)
+        print("PROOF OF CONCEPT: Lambda Target Regularization")
+        print("="*80)
+        print(f"Device: {DEVICE} | Epochs: {args.epochs} | Target Lambdas: {target_lambdas} (default)")
+        print("="*80 + "\n")
     
-    print("\n" + "="*80)
-    print("PROOF OF CONCEPT: Lambda Measurability in Neural Networks")
-    print("="*80)
-    print(f"\nConfiguration:")
-    print(f"  Device: {DEVICE}")
-    print(f"  Seed: {SEED}")
-    print(f"  K_dirs: {K_DIRS}")
-    print(f"  Max derivative order: {MAX_ORDER}")
-    print(f"  Training epochs: {args.epochs}")
-    print(f"  Regularization scales: {reg_scales}")
-    
-    # Run experiments for each regularization scale
+    # Run experiments
     mnist_results_by_reg = {}
     cifar_results_by_reg = {}
     
-    for reg_scale in reg_scales:
-        print(f"\n{'='*80}")
-        print(f"Running experiments with regularization scale: {reg_scale}")
-        print(f"{'='*80}")
-        
-        mnist_results = experiment_2_mnist_training(n_epochs=args.epochs, reg_scale=reg_scale)
-        cifar_results = experiment_3_cifar10_training(n_epochs=args.epochs, reg_scale=reg_scale)
-        
-        mnist_results_by_reg[reg_scale] = mnist_results
-        cifar_results_by_reg[reg_scale] = cifar_results
+    if target_lambdas is not None:
+        # Target lambda mode
+        reg_pbar = tqdm(target_lambdas, desc="Target Lambdas", position=0, leave=True, 
+                        bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
+        for target_lambda in reg_pbar:
+            reg_pbar.set_description(f"Target λ: {target_lambda:.2f}")
+            mnist_results = experiment_2_mnist_training(n_epochs=args.epochs, target_lambda=target_lambda)
+            cifar_results = experiment_3_cifar10_training(n_epochs=args.epochs, target_lambda=target_lambda)
+            
+            mnist_results_by_reg[target_lambda] = mnist_results
+            cifar_results_by_reg[target_lambda] = cifar_results
+    else:
+        # Legacy reg scale mode
+        reg_pbar = tqdm(reg_scales, desc="Reg Scales", position=0, leave=True, 
+                        bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
+        for reg_scale in reg_pbar:
+            reg_pbar.set_description(f"Reg Scale: {reg_scale}")
+            mnist_results = experiment_2_mnist_training(n_epochs=args.epochs, reg_scale=reg_scale)
+            cifar_results = experiment_3_cifar10_training(n_epochs=args.epochs, reg_scale=reg_scale)
+            
+            mnist_results_by_reg[reg_scale] = mnist_results
+            cifar_results_by_reg[reg_scale] = cifar_results
     
-    # Save detailed results for the first reg_scale (backward compatibility)
-    save_results_to_file(mnist_results_by_reg[reg_scales[0]], 
-                        cifar_results_by_reg[reg_scales[0]], 
-                        args.epochs)
+    # Save detailed results for all reg scales
+    print("\n" + "="*80)
+    print("Saving results and generating plots...")
+    print("="*80)
+    save_results_to_file(mnist_results_by_reg, cifar_results_by_reg, args.epochs)
     
     # Create comparison plots
-    print("\n" + "="*80)
-    print("CREATING REGULARIZATION COMPARISON PLOTS")
-    print("="*80)
+    plot_pbar = tqdm(total=8, desc="Generating plots", position=0, leave=True)
     
     # Lambda evolution plots with multiple reg scales
     plot_lambda_evolution_multi_reg(
@@ -554,32 +693,63 @@ def main():
         dataset_name="MNIST",
         save_path="results/proof_of_concept/mnist/lambda_evolution/multi_reg_comparison.png"
     )
+    plot_pbar.update(1)
     
     plot_lambda_evolution_multi_reg(
         cifar_results_by_reg,
         dataset_name="CIFAR10",
         save_path="results/proof_of_concept/cifar10/lambda_evolution/multi_reg_comparison.png"
     )
+    plot_pbar.update(1)
     
     # Metric vs reg scale plots
     plot_all_metrics_vs_reg_scale(
         mnist_results_by_reg,
         dataset_name="MNIST"
     )
+    plot_pbar.update(3)  # 3 plots per dataset
     
     plot_all_metrics_vs_reg_scale(
         cifar_results_by_reg,
         dataset_name="CIFAR10"
     )
+    plot_pbar.update(3)  # 3 plots per dataset
+    
+    # Regularization magnitude plots
+    plot_reg_magnitude_evolution(
+        mnist_results_by_reg,
+        dataset_name="MNIST",
+        save_path="results/proof_of_concept/mnist/reg_magnitude_evolution.png"
+    )
+    plot_pbar.update(1)
+    
+    plot_reg_magnitude_evolution(
+        cifar_results_by_reg,
+        dataset_name="CIFAR10",
+        save_path="results/proof_of_concept/cifar10/reg_magnitude_evolution.png"
+    )
+    plot_pbar.update(1)
+    
+    plot_reg_magnitude_vs_scale(
+        mnist_results_by_reg,
+        dataset_name="MNIST",
+        save_path="results/proof_of_concept/mnist/reg_magnitude_vs_scale.png"
+    )
+    plot_pbar.update(1)
+    
+    plot_reg_magnitude_vs_scale(
+        cifar_results_by_reg,
+        dataset_name="CIFAR10",
+        save_path="results/proof_of_concept/cifar10/reg_magnitude_vs_scale.png"
+    )
+    plot_pbar.update(1)
+    plot_pbar.close()
     
     print("\n" + "="*80)
-    print("ALL EXPERIMENTS COMPLETED")
+    print("✓ ALL EXPERIMENTS COMPLETED")
     print("="*80)
-    print("\nKey Findings:")
-    print("1. Lambda is measurable with per-direction estimation")
-    print("2. Variance across directions indicates measurement stability")
-    print("3. Works across different architectures and datasets")
-    print("4. Regularization strength affects lambda evolution and model performance")
+    print(f"Results saved to: results/proof_of_concept/results.txt")
+    print(f"Plots saved to: results/proof_of_concept/")
     print("="*80 + "\n")
 
 

@@ -61,10 +61,12 @@ def train_epoch(
         regularizer_fn: Optional regularization function taking (model, inputs, labels, loss_fn)
     
     Returns:
-        Dictionary with 'loss' and 'accuracy' for the epoch
+        Dictionary with 'loss', 'accuracy', and optionally 'reg_loss' and 'main_loss' for the epoch
     """
     model.train()
     total_loss = 0.0
+    total_main_loss = 0.0
+    total_reg_loss = 0.0
     total_correct = 0
     total_samples = 0
     
@@ -75,27 +77,37 @@ def train_epoch(
         
         # Forward pass
         logits = model(inputs)
-        loss = loss_fn(logits, labels)
+        main_loss = loss_fn(logits, labels)
         
-        # Add regularization if provided
+        # Add regularization if provided (applied per batch)
+        reg_loss = torch.tensor(0.0, device=device)
         if regularizer_fn is not None:
             reg_loss = regularizer_fn(model, inputs, labels, loss_fn)
-            loss = loss + reg_loss
+            loss = main_loss + reg_loss
+        else:
+            loss = main_loss
         
         # Backward pass
         loss.backward()
         optimizer.step()
         
         # Track metrics
-        total_loss += loss.item() * inputs.size(0)
+        batch_size = inputs.size(0)
+        total_loss += loss.item() * batch_size
+        total_main_loss += main_loss.item() * batch_size
+        total_reg_loss += reg_loss.item() * batch_size
         predictions = logits.argmax(dim=1)
         total_correct += (predictions == labels).sum().item()
-        total_samples += inputs.size(0)
+        total_samples += batch_size
     
-    return {
+    result = {
         'loss': total_loss / total_samples,
-        'accuracy': total_correct / total_samples
+        'accuracy': total_correct / total_samples,
+        'main_loss': total_main_loss / total_samples,
+        'reg_loss': total_reg_loss / total_samples
     }
+    
+    return result
 
 
 def evaluate(
@@ -223,4 +235,76 @@ class LambdaTracker:
         print(f"Initial λ: {initial_lambda:.6f}")
         print(f"Final λ:   {final_lambda:.6f}")
         print(f"Change:    {lambda_change:.6f} ({lambda_change_pct:+.2f}%)")
+        print("="*60 + "\n")
+
+
+class RegTracker:
+    """
+    Tracks regularization magnitude during training.
+    
+    Example:
+        >>> tracker = RegTracker()
+        >>> tracker.record(epoch=0, reg_loss=0.01, main_loss=0.5)
+        >>> tracker.record(epoch=1, reg_loss=0.008, main_loss=0.3)
+        >>> tracker.get_history()
+    """
+    
+    def __init__(self):
+        self.epochs = []
+        self.reg_losses = []
+        self.main_losses = []
+        self.reg_ratios = []  # reg_loss / main_loss
+        self.timestamps = []
+    
+    def record(self, epoch: int, reg_loss: float, main_loss: float):
+        """Record regularization statistics for an epoch."""
+        self.epochs.append(epoch)
+        self.reg_losses.append(reg_loss)
+        self.main_losses.append(main_loss)
+        ratio = reg_loss / main_loss if main_loss > 0 else 0.0
+        self.reg_ratios.append(ratio)
+        self.timestamps.append(time.time())
+    
+    def get_history(self) -> Dict[str, List]:
+        """Get complete tracking history."""
+        return {
+            'epochs': self.epochs,
+            'reg_losses': self.reg_losses,
+            'main_losses': self.main_losses,
+            'reg_ratios': self.reg_ratios,
+            'timestamps': self.timestamps
+        }
+    
+    def get_latest(self) -> Optional[Dict[str, float]]:
+        """Get most recent regularization statistics."""
+        if len(self.epochs) == 0:
+            return None
+        return {
+            'epoch': self.epochs[-1],
+            'reg_loss': self.reg_losses[-1],
+            'main_loss': self.main_losses[-1],
+            'reg_ratio': self.reg_ratios[-1]
+        }
+    
+    def print_summary(self):
+        """Print summary of regularization evolution."""
+        if len(self.epochs) == 0:
+            print("No regularization measurements recorded.")
+            return
+        
+        print("\n" + "="*60)
+        print("Regularization Magnitude Summary")
+        print("="*60)
+        print(f"{'Epoch':<10} {'Reg Loss':<15} {'Main Loss':<15} {'Ratio':<15}")
+        print("-"*60)
+        
+        for epoch, reg, main, ratio in zip(self.epochs, self.reg_losses, self.main_losses, self.reg_ratios):
+            print(f"{epoch:<10} {reg:<15.6f} {main:<15.6f} {ratio:<15.6f}")
+        
+        # Summary statistics
+        if len(self.reg_losses) > 0:
+            print("-"*60)
+            print(f"Mean Reg Loss: {np.mean(self.reg_losses):.6f}")
+            print(f"Mean Reg Ratio: {np.mean(self.reg_ratios):.6f}")
+            print(f"Max Reg Ratio: {np.max(self.reg_ratios):.6f}")
         print("="*60 + "\n")
