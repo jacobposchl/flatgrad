@@ -1,6 +1,6 @@
 '''
 Estimate Lambda:
-Calculated as \lambda = log(\frac{d_{n+1}}{d_n}) where d_n is the n-th order derivative
+Calculated as \\lambda = log(\\frac{d_{n+1}}{d_n}) where d_n is the n-th order derivative
 '''
 
 import torch

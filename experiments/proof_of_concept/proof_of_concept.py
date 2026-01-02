@@ -282,14 +282,15 @@ def experiment_2_mnist_training(n_epochs=50, target_lambda=None, reg_scale=None)
     regularizer_fn = None
     if target_lambda is not None:
         # Use target lambda regularizer
-        # Scale calculation: With scale=1.0, Reg was 4-25 (too high, prevents learning)
-        # To get Reg ≈ 0.05-0.2 (5-20% of main loss), we need scale ≈ 0.01
-        # This gives: Reg = (4-25) / 100 ≈ 0.04-0.25, which is ideal for learning
+        # Scale needs to be larger to effectively push lambda toward target
+        # The gradient signal is weak because lambda depends on nested derivatives w.r.t. inputs
+        # With scale=0.01, lambda wasn't moving toward targets (e.g., target -7.0, final -2.96)
+        # Increasing to 0.1 to strengthen the gradient signal while keeping Reg reasonable
         def regularizer_fn(model, inputs, labels, loss_fn):
             return compute_lambda_target_regularizer(
                 model, inputs, labels, loss_fn,
                 target_lambda=target_lambda,
-                max_order=MAX_ORDER, K_dirs=K_DIRS, scale=0.01
+                max_order=MAX_ORDER, K_dirs=K_DIRS, scale=0.1
             )
     elif reg_scale is not None and reg_scale > 0:
         # Legacy: use old regularizer for backward compatibility
@@ -481,14 +482,15 @@ def experiment_3_cifar10_training(n_epochs=50, target_lambda=None, reg_scale=Non
     regularizer_fn = None
     if target_lambda is not None:
         # Use target lambda regularizer
-        # Scale calculation: With scale=1.0, Reg was 4-25 (too high, prevents learning)
-        # To get Reg ≈ 0.05-0.2 (5-20% of main loss), we need scale ≈ 0.01
-        # This gives: Reg = (4-25) / 100 ≈ 0.04-0.25, which is ideal for learning
+        # Scale needs to be larger to effectively push lambda toward target
+        # The gradient signal is weak because lambda depends on nested derivatives w.r.t. inputs
+        # With scale=0.01, lambda wasn't moving toward targets (e.g., target -7.0, final -2.96)
+        # Increasing to 0.1 to strengthen the gradient signal while keeping Reg reasonable
         def regularizer_fn(model, inputs, labels, loss_fn):
             return compute_lambda_target_regularizer(
                 model, inputs, labels, loss_fn,
                 target_lambda=target_lambda,
-                max_order=MAX_ORDER, K_dirs=K_DIRS, scale=0.01
+                max_order=MAX_ORDER, K_dirs=K_DIRS, scale=0.1
             )
     elif reg_scale is not None and reg_scale > 0:
         # Legacy: use old regularizer for backward compatibility
