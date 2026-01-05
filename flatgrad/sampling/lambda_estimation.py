@@ -1,6 +1,6 @@
 '''
 Estimate Lambda:
-Calculated as \lambda = log(\frac{d_{n+1}}{d_n}) where d_n is the n-th order derivative
+Calculated as \\lambda = log(\\frac{d_{n+1}}{d_n}) where d_n is the n-th order derivative
 '''
 
 import torch
@@ -168,12 +168,14 @@ def estimate_lambda_per_direction(
     lambda_values_per_direction = []
     
     # Compute λ for each direction independently
-    for _ in range(K_dirs):
+    for dir_idx in range(K_dirs):
         # Sample random direction
         direction = sample_unit_directions(batch_size, input_shape, device)
         
         # Compute derivatives for this direction
         try:
+            # create_graph=True is REQUIRED for max_order > 1
+            # Higher-order derivatives need the computational graph to backprop through previous derivatives
             derivatives = compute_directional_derivatives(
                 model=model,
                 inputs=inputs,
@@ -182,9 +184,8 @@ def estimate_lambda_per_direction(
                 loss_fn=loss_fn,
                 min_order=1,
                 max_order=max_order,
-                create_graph=False  # Don't need graph for estimation
+                create_graph=True
             )
-            
             # Take absolute values
             derivatives = [d.abs() for d in derivatives]
             
@@ -208,7 +209,6 @@ def estimate_lambda_per_direction(
                 # Compute mean log derivative across valid samples
                 log_d_n = torch.log(d_n[valid_samples]).mean().item()
                 log_derivatives.append(log_d_n)
-            
             # Fit linear regression: log|d_n| = intercept + slope * n
             # Slope is our λ estimate for this direction
             if len(log_derivatives) >= 2:
@@ -218,11 +218,13 @@ def estimate_lambda_per_direction(
                 # Simple linear fit
                 slope, intercept = np.polyfit(orders, log_derivs_array, 1)
                 
+                
                 if np.isfinite(slope):
                     lambda_values_per_direction.append(slope)
-        
-        except Exception:
+
+        except Exception as e:
             # Skip this direction if computation fails
+            print(f"  Exception: {type(e).__name__}: {e}")
             continue
     
     # Restore training state

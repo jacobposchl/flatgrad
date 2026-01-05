@@ -42,10 +42,20 @@ def plot_lambda_evolution(
     plt.tight_layout()
     
     if save_path:
+        from pathlib import Path
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
+        # Plot saved (suppress print for cleaner output)
+    else:
+        # Save to results/proof_of_concept by default
+        from pathlib import Path
+        output_dir = Path('results/proof_of_concept')
+        output_dir.mkdir(parents=True, exist_ok=True)
+        default_path = output_dir / 'lambda_evolution.png'
+        plt.savefig(default_path, dpi=300, bbox_inches='tight')
+        print(f"Saved plot to {default_path}")
     
-    plt.show()
+    plt.close()
 
 
 def plot_derivative_profile(
@@ -85,10 +95,12 @@ def plot_derivative_profile(
     plt.tight_layout()
     
     if save_path:
+        from pathlib import Path
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
+        # Plot saved (suppress print for cleaner output)
     
-    plt.show()
+    plt.close()
 
 
 def plot_cross_dataset_comparison(
@@ -143,16 +155,27 @@ def plot_cross_dataset_comparison(
     plt.tight_layout()
     
     if save_path:
+        from pathlib import Path
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
+        # Plot saved (suppress print for cleaner output)
+    else:
+        # Save to results/proof_of_concept by default
+        from pathlib import Path
+        output_dir = Path('results/proof_of_concept')
+        output_dir.mkdir(parents=True, exist_ok=True)
+        default_path = output_dir / 'cross_dataset_comparison.png'
+        plt.savefig(default_path, dpi=300, bbox_inches='tight')
+        print(f"Saved plot to {default_path}")
     
-    plt.show()
+    plt.close()
 
 
 def plot_lambda_distribution(
     lambda_values: List[float],
     title: str = "Lambda Distribution Across Directions",
-    save_path: Optional[str] = None
+    save_path: Optional[str] = None,
+    reg_scale: Optional[float] = None
 ):
     """
     Plot histogram of lambda values from different directions.
@@ -161,6 +184,7 @@ def plot_lambda_distribution(
         lambda_values: List of lambda estimates (one per direction)
         title: Plot title
         save_path: Optional path to save figure
+        reg_scale: Optional regularization scale to display in the plot
     """
     fig, ax = plt.subplots(figsize=(10, 6))
     
@@ -173,9 +197,12 @@ def plot_lambda_distribution(
     ax.axvline(mean_lambda, color='red', linestyle='--', linewidth=2,
                label=f'Mean: {mean_lambda:.4f}')
     
-    # Add std annotation
+    # Add std and reg_scale annotation
     std_lambda = np.std(lambda_values, ddof=1)
-    ax.text(0.02, 0.98, f'Std: {std_lambda:.4f}', 
+    annotation_text = f'Std: {std_lambda:.4f}'
+    if reg_scale is not None:
+        annotation_text += f'\nReg Scale: {reg_scale}'
+    ax.text(0.02, 0.98, annotation_text, 
             transform=ax.transAxes, fontsize=12,
             verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
@@ -189,7 +216,17 @@ def plot_lambda_distribution(
     plt.tight_layout()
     
     if save_path:
+        from pathlib import Path
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved plot to {save_path}")
+        # Plot saved (suppress print for cleaner output)
+    else:
+        # Save to results/proof_of_concept by default
+        from pathlib import Path
+        output_dir = Path('results/proof_of_concept')
+        output_dir.mkdir(parents=True, exist_ok=True)
+        default_path = output_dir / 'lambda_distribution.png'
+        plt.savefig(default_path, dpi=300, bbox_inches='tight')
+        print(f"Saved plot to {default_path}")
     
-    plt.show()
+    plt.close()
