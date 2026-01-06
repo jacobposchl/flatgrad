@@ -57,7 +57,7 @@ def run_all_experiments(dataset: str, output_base_dir: str):
     configs = get_all_experiment_configs(dataset=dataset)
     
     print("\n" + "="*80)
-    print(f"PROOF OF CONCEPT: Lambda as a Diagnostic Metric")
+    print(f"=== PROOF OF CONCEPT: Lambda as a Diagnostic Metric ===")
     print("="*80)
     print(f"\nRunning {len(configs)} experiments on {dataset.upper()}")
     print(f"Output directory: {output_base_dir}")
