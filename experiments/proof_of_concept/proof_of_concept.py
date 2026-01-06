@@ -93,7 +93,7 @@ def run_validation_analyses_wrapper(results_dir: str):
         results_dir: Directory containing experiment results
     """
     print("\n" + "="*80)
-    print("Running Post-Hoc Validation Analyses")
+    print("---- Running Post-Hoc Validation Analyses ----")
     print("="*80 + "\n")
     
     try:

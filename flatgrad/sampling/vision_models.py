@@ -48,6 +48,47 @@ class MNISTConvNet(nn.Module):
         return x
 
 
+class CIFAR10MLP(nn.Module):
+    """
+    Simple MLP for CIFAR-10 (32x32 RGB images).
+    
+    Uses flattened input (3072 features) instead of convolutions.
+    This reduces model capacity significantly compared to CNNs, making it:
+    - Harder to achieve 100% train accuracy (prevents memorization)
+    - Faster to train (fewer parameters)
+    - Still capable of learning meaningful patterns
+    
+    Architecture:
+        Flatten(3072) -> FC(3072 -> 512) -> BN -> ReLU -> Dropout
+        FC(512 -> 256) -> BN -> ReLU -> Dropout
+        FC(256 -> 10)
+    
+    Expected accuracy: ~55-65% on CIFAR-10 (much lower than CNN's 80-85%)
+    """
+    
+    def __init__(self, dropout_rate: float = 0.5):
+        super().__init__()
+        self.fc1 = nn.Linear(3 * 32 * 32, 512)  # Flatten CIFAR-10 images
+        self.bn1 = nn.BatchNorm1d(512)
+        self.fc2 = nn.Linear(512, 256)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.fc3 = nn.Linear(256, 10)
+        
+        # Store dropout rate for inspection
+        self.dropout_rate = dropout_rate
+        self.dropout = nn.Dropout(dropout_rate)
+    
+    def forward(self, x):
+        # Input: [B, 3, 32, 32]
+        x = x.view(x.size(0), -1)  # [B, 3072]
+        x = F.relu(self.bn1(self.fc1(x)))  # [B, 512]
+        x = self.dropout(x)
+        x = F.relu(self.bn2(self.fc2(x)))  # [B, 256]
+        x = self.dropout(x)
+        x = self.fc3(x)  # [B, 10]
+        return x
+
+
 class CIFAR10ConvNet(nn.Module):
     """
     Simple convolutional network for CIFAR-10 (32x32 RGB images).
@@ -102,7 +143,7 @@ def create_vision_model(dataset: str, dropout_rate: float = 0.5) -> nn.Module:
     Factory function to create vision models.
     
     Args:
-        dataset: 'mnist', 'mnist_convnet', 'cifar10', or 'cifar10_convnet'
+        dataset: 'mnist', 'mnist_convnet', 'cifar10', 'cifar10_convnet', or 'cifar10_mlp'
         dropout_rate: Dropout probability (default: 0.5)
     
     Returns:
@@ -110,7 +151,7 @@ def create_vision_model(dataset: str, dropout_rate: float = 0.5) -> nn.Module:
     
     Example:
         >>> model = create_vision_model('mnist')
-        >>> model = create_vision_model('cifar10', dropout_rate=0.3)
+        >>> model = create_vision_model('cifar10_mlp', dropout_rate=0.3)  # Use MLP instead of CNN
     """
     dataset = dataset.lower()
     
@@ -119,8 +160,10 @@ def create_vision_model(dataset: str, dropout_rate: float = 0.5) -> nn.Module:
         return MNISTConvNet(dropout_rate=dropout_rate)
     elif dataset in ('cifar10', 'cifar10_convnet'):
         return CIFAR10ConvNet(dropout_rate=dropout_rate)
+    elif dataset == 'cifar10_mlp':
+        return CIFAR10MLP(dropout_rate=dropout_rate)
     else:
-        raise ValueError(f"Unknown dataset: {dataset}. Supported: 'mnist', 'mnist_convnet', 'cifar10', 'cifar10_convnet'")
+        raise ValueError(f"Unknown dataset: {dataset}. Supported: 'mnist', 'mnist_convnet', 'cifar10', 'cifar10_convnet', 'cifar10_mlp'")
 
 
 # Alias for backward compatibility

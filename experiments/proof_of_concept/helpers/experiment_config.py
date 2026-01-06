@@ -116,7 +116,7 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
     if dataset in ['mnist', 'both']:
         datasets_to_run.append(('mnist', 'mnist_convnet'))
     if dataset in ['cifar10', 'both']:
-        datasets_to_run.append(('cifar10', 'cifar10_convnet'))
+        datasets_to_run.append(('cifar10', 'cifar10_mlp'))  # Use MLP instead of CNN
     
     configs = []
     
@@ -129,9 +129,9 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
             test_size = 1000
             use_scheduler = False
         else:  # cifar10
-            base_lr = 0.001  # Same as MNIST to slow down learning
-            base_epochs = 80  # Reduced to prevent complete memorization
-            train_size = 20000  # Increased to 40% of dataset (harder to memorize)
+            base_lr = 0.001  # Same as MNIST
+            base_epochs = 80  # Longer training for MLP
+            train_size = 10000  # 20% of dataset - enough for MLP to learn without memorizing
             test_size = 2000
             use_scheduler = True  # Use cosine annealing for CIFAR10
         
