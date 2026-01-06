@@ -316,10 +316,8 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
     # Save config
     config.save(str(exp_dir / 'config.json'))
     
-    # Set up checkpoint
-    checkpoint_dir = Path(output_dir).parent / 'progress' / config.dataset / config.method_name
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = str(checkpoint_dir / 'checkpoint.pt')
+    # Set up checkpoint (save within experiment directory)
+    checkpoint_path = str(exp_dir / 'checkpoint.pt')
     
     # Set up data loaders
     train_loader, test_loader = setup_data_loaders(config)
@@ -378,7 +376,6 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
     
     # Initial evaluation at epoch 0 if starting from scratch
     if start_epoch == 0:
-        print("Evaluating at epoch 0...")
         # Evaluate untrained model
         test_metrics_0 = evaluate(model, test_loader, loss_fn, device, compute_calibration=True)
         train_metrics_0 = evaluate(model, train_loader, loss_fn, device, compute_calibration=False)
@@ -393,7 +390,6 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
         
         # Measure lambda at epoch 0 if scheduled
         if 0 in measurement_epochs:
-            print(f"Measuring lambda at epoch 0...")
             lambda_result = measure_lambda(model, train_loader, device, config.K_dirs, config.max_order, store_full_data=True)
             if lambda_result['lambda_mean'] is not None:
                 lambda_tracker.record(
@@ -406,8 +402,11 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
                 lambda_means_all_epochs[0] = lambda_result['lambda_mean']
                 lambda_stds_all_epochs[0] = lambda_result['lambda_std']
     
-    # Training loop
-    for epoch in range(start_epoch, config.epochs):
+    # Training loop with progress bar
+    pbar = tqdm(range(start_epoch, config.epochs), desc=f"{config.dataset}/{config.method_name}", 
+                initial=start_epoch, total=config.epochs, ncols=100)
+    
+    for epoch in pbar:
         epoch_start_time = time.time()
         
         # Train for one epoch
@@ -427,8 +426,8 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
         eces.append(test_metrics.get('ece', 0.0))
         
         # Measure lambda if scheduled
+        lambda_status = ""
         if (epoch + 1) in measurement_epochs:
-            print(f"  Measuring lambda at epoch {epoch + 1}...")
             lambda_result = measure_lambda(model, train_loader, device, config.K_dirs, config.max_order, store_full_data=True)
             if lambda_result['lambda_mean'] is not None:
                 lambda_tracker.record(
@@ -440,15 +439,16 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
                 )
                 lambda_means_all_epochs[epoch + 1] = lambda_result['lambda_mean']
                 lambda_stds_all_epochs[epoch + 1] = lambda_result['lambda_std']
+                lambda_status = f" λ={lambda_result['lambda_mean']:.3f}"
         
-        # Print progress
+        # Update progress bar
         epoch_time = time.time() - epoch_start_time
-        print(f"Epoch {epoch + 1}/{config.epochs} | "
-              f"Train Acc: {train_metrics['accuracy']:.4f} | "
-              f"Test Acc: {test_metrics['accuracy']:.4f} | "
-              f"Loss: {test_metrics['loss']:.4f} | "
-              f"ECE: {test_metrics.get('ece', 0.0):.4f} | "
-              f"Time: {epoch_time:.2f}s")
+        pbar.set_postfix({
+            'train_acc': f"{train_metrics['accuracy']:.4f}",
+            'test_acc': f"{test_metrics['accuracy']:.4f}",
+            'loss': f"{test_metrics['loss']:.4f}",
+            'time': f"{epoch_time:.1f}s"
+        })
         
         # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0 or epoch == config.epochs - 1:
@@ -461,10 +461,10 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
                 'eces': eces
             }
             save_checkpoint(checkpoint_path, epoch, model, optimizer, metrics_dict, lambda_tracker)
-            print(f"  Checkpoint saved at epoch {epoch + 1}")
+    
+    pbar.close()
     
     # Save final results
-    print("\nSaving results...")
     
     # Save lambda data
     lambda_data_path = str(exp_dir / 'lambda_data.npz')
