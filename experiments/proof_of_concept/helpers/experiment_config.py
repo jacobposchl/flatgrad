@@ -71,8 +71,8 @@ class ExperimentConfig:
     max_order: int = 6
     
     # Data subset parameters
-    train_subset_size: Optional[int] = 5000
-    test_subset_size: Optional[int] = 1000
+    train_subset_size: Optional[int] = None
+    test_subset_size: Optional[int] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -116,7 +116,7 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
     if dataset in ['mnist', 'both']:
         datasets_to_run.append(('mnist', 'mnist_mlp'))  # Use large MLP to enable overfitting
     if dataset in ['cifar10', 'both']:
-        datasets_to_run.append(('cifar10', 'cifar10_mlp'))  # Use MLP instead of CNN
+        datasets_to_run.append(('cifar10', 'cifar10_convnet'))  # Use ConvNet for proper image classification
     
     configs = []
     
@@ -129,11 +129,11 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
             test_size = 1000
             use_scheduler = False
         else:  # cifar10
-            base_lr = 0.001  # Same as MNIST
-            base_epochs = 50  # Shorter - MLP still learns too fast
-            train_size = 5000  # Reduced from 10k - smaller MLP needs less data
-            test_size = 1000
-            use_scheduler = False  # Disable scheduler for faster experiments
+            base_lr = 0.001  # Adam with default LR
+            base_epochs = 100  # Longer training for proper convergence with CNN
+            train_size = None  # Use full training set (50,000 samples)
+            test_size = None  # Use full test set (10,000 samples)
+            use_scheduler = True  # Enable cosine annealing for better convergence
         
         # 1. Baseline (no regularization)
         configs.append(ExperimentConfig(
