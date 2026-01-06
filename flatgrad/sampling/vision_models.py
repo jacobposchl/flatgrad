@@ -50,28 +50,28 @@ class MNISTConvNet(nn.Module):
 
 class MNISTMLP(nn.Module):
     """
-    Large MLP for MNIST - designed to overfit without regularization.
+    Very large MLP for MNIST - designed to strongly overfit without regularization.
     
-    Uses larger hidden layers to create high model capacity. Without
-    regularization, this model will overfit on moderate-sized datasets,
-    creating room for regularization methods to show their benefits.
+    Uses very large hidden layers to create extreme model capacity. Without
+    regularization, this model will overfit heavily on small-to-moderate datasets,
+    creating strong room for regularization methods to show their benefits.
     
     Architecture:
-        Flatten(784) -> FC(784 -> 1024) -> ReLU -> Dropout(configurable)
-        FC(1024 -> 512) -> ReLU -> Dropout(configurable)
-        FC(512 -> 256) -> ReLU
-        FC(256 -> 10)
+        Flatten(784) -> FC(784 -> 2048) -> ReLU -> Dropout(configurable)
+        FC(2048 -> 1024) -> ReLU -> Dropout(configurable)
+        FC(1024 -> 512) -> ReLU
+        FC(512 -> 10)
     
-    Parameters: ~1.3M (high capacity for 28x28 images)
-    Expected: Overfits on 5k samples without regularization
+    Parameters: ~2.6M (very high capacity for 28x28 images)
+    Expected: Strong overfitting on 2500 samples without regularization
     """
     
     def __init__(self, dropout_rate: float = 0.0):
         super().__init__()
-        self.fc1 = nn.Linear(784, 1024)
-        self.fc2 = nn.Linear(1024, 512)
-        self.fc3 = nn.Linear(512, 256)
-        self.fc4 = nn.Linear(256, 10)
+        self.fc1 = nn.Linear(784, 2048)  # Doubled from 1024
+        self.fc2 = nn.Linear(2048, 1024)  # Doubled from 512
+        self.fc3 = nn.Linear(1024, 512)   # Doubled from 256
+        self.fc4 = nn.Linear(512, 10)
         
         # Store dropout rate for inspection
         self.dropout_rate = dropout_rate
@@ -80,11 +80,11 @@ class MNISTMLP(nn.Module):
     def forward(self, x):
         # Input: [B, 1, 28, 28]
         x = x.view(x.size(0), -1)  # [B, 784]
-        x = F.relu(self.fc1(x))  # [B, 1024]
+        x = F.relu(self.fc1(x))  # [B, 2048]
         x = self.dropout(x)
-        x = F.relu(self.fc2(x))  # [B, 512]
+        x = F.relu(self.fc2(x))  # [B, 1024]
         x = self.dropout(x)
-        x = F.relu(self.fc3(x))  # [B, 256]
+        x = F.relu(self.fc3(x))  # [B, 512]
         x = self.fc4(x)  # [B, 10]
         return x
 

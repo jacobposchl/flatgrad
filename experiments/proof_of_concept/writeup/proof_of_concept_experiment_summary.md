@@ -338,14 +338,14 @@ These analyses collectively answer:
 **Design Choice**: We use **dataset-specific hyperparameters** to ensure both datasets operate in the "Goldilocks zone" where regularization effects are observable.
 
 #### MNIST Configuration
-- **Model**: Large MLP (not CNN) - 784 → 1024 → 512 → 256 → 10 (~1.3M params)
-- **Learning rate**: 0.001
-- **Epochs**: 100 (increased from 50 to allow overfitting)
+- **Model**: Very large MLP (not CNN) - 784 → 2048 → 1024 → 512 → 10 (~2.6M params)
+- **Learning rate**: 0.003 (3x higher than baseline to enable faster overfitting)
+- **Epochs**: 120 (extended training to allow strong overfitting)
 - **Batch size**: 128
-- **Subset size**: 5000 train / 1000 test (10% of full dataset)
+- **Subset size**: 2500 train / 1000 test (5% of full dataset, 250 per class)
 - **LR scheduler**: None
 - **Baseline dropout**: 0.0 (no regularization)
-- **Target performance**: Baseline train 98-100%, test 94-96% (gap ~4-6%)
+- **Target performance**: Baseline train 99-100%, test 90-93% (gap ~7-10%)
 
 #### CIFAR10 Configuration  
 - **Model**: Smaller MLP (not CNN) - 3072 → 256 → 128 → 10
@@ -370,12 +370,14 @@ These analyses collectively answer:
   - Clear separation between regularization methods (5-10% accuracy range)
   - Room for λ to correlate with performance variation
   
-- **MNIST**: Uses **large MLP** (1024→512→256, ~1.3M params) with 5000 samples
-  - **Why large MLP?** High model capacity relative to data → enables overfitting
-  - **100 epochs**: More training time allows baseline to overfit (would converge around epoch 30-40)
+- **MNIST**: Uses **very large MLP** (2048→1024→512, ~2.6M params) with only 2500 samples
+  - **Why very large MLP?** Extreme model capacity (2.6M params) relative to small data (2500 samples) → strong overfitting
+  - **Higher learning rate (0.003)**: Faster convergence to sharper minima → worse generalization
+  - **120 epochs**: Extended training allows baseline to overfit heavily beyond convergence
   - **No dropout in baseline**: Baseline has `dropout_rate=0.0`, regularization methods use `dropout_rate>0`
-  - **Realistic dataset size**: 5000 samples (10% of MNIST) is reasonable for experiments
-  - **Target**: Baseline train 98-100%, test 94-96% (gap 4-6%) vs Regularized test 96-98% (gap 0-2%)
+  - **Small dataset (2500 samples)**: Only 250 examples per digit → 4x capacity/data ratio vs 5k samples
+  - **Combined effect**: Model capacity >> data → forces aggressive overfitting in baseline
+  - **Target**: Baseline train 99-100%, test 90-93% (gap 7-10%) vs Regularized test 94-97% (gap 3-6%)
 
 - **CIFAR10**: Uses **small MLP** (256→128, ~800k params) with 5,000 samples (10% of dataset)
   - **Why such a small MLP?** Even 512→256 MLP achieved 99% train accuracy by epoch 18

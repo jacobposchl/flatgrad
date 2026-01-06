@@ -123,9 +123,9 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
     for ds_name, model_type in datasets_to_run:
         # Dataset-specific hyperparameters
         if ds_name == 'mnist':
-            base_lr = 0.001
-            base_epochs = 100  # Increased from 50 to allow overfitting
-            train_size = 5000  # Realistic dataset size
+            base_lr = 0.003  # Increased from 0.001 for faster overfitting
+            base_epochs = 120  # Increased from 100 for more overfitting
+            train_size = 2500  # Reduced from 5000 to increase overfitting
             test_size = 1000
             use_scheduler = False
         else:  # cifar10
