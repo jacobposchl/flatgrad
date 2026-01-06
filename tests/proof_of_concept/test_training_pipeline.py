@@ -133,9 +133,9 @@ class TestBaselineTraining(unittest.TestCase):
             PoCAssertions.assert_lambda_npz_valid(lambda_path)
             
             # Additional checks
-            data = np.load(lambda_path, allow_pickle=True)
-            # Should have measurements at epochs [0, 1, 2]
-            self.assertTrue(len(data['epochs']) >= 2)  # At least start and end
+            with np.load(lambda_path, allow_pickle=True) as data:
+                # Should have measurements at epochs [0, 1, 2]
+                self.assertTrue(len(data['epochs']) >= 2)  # At least start and end
 
 
 class TestDropoutRegularization(unittest.TestCase):
@@ -392,12 +392,12 @@ class TestLambdaMeasurement(unittest.TestCase):
             result = run_single_experiment(config, str(tmpdir), device=torch.device('cpu'))
             
             # Load lambda data
-            data = np.load(result['lambda_data_path'], allow_pickle=True)
-            measured_epochs = data['epochs'].tolist()
-            
-            # Should include epoch 0 and 10 at minimum
-            self.assertIn(0, measured_epochs)
-            self.assertIn(10, measured_epochs)
+            with np.load(result['lambda_data_path'], allow_pickle=True) as data:
+                measured_epochs = data['epochs'].tolist()
+                
+                # Should include epoch 0 and 10 at minimum
+                self.assertIn(0, measured_epochs)
+                self.assertIn(10, measured_epochs)
     
     @patch('experiments.proof_of_concept.helpers.training_pipeline.setup_data_loaders')
     def test_lambda_values_reasonable(self, mock_data_loaders):
@@ -433,21 +433,21 @@ class TestLambdaMeasurement(unittest.TestCase):
             result = run_single_experiment(config, str(tmpdir), device=torch.device('cpu'))
             
             # Load lambda data
-            data = np.load(result['lambda_data_path'], allow_pickle=True)
-            derivatives_per_epoch = data['derivatives_per_epoch']
-            
-            # Check structure: should be list of (K_dirs x max_order) arrays
-            self.assertGreater(len(derivatives_per_epoch), 0)
-            
-            # Check first measurement
-            first_measurement = derivatives_per_epoch[0]
-            if first_measurement is not None and len(first_measurement) > 0:
-                # Should have up to K_dirs directions
-                self.assertLessEqual(len(first_measurement), 5)
+            with np.load(result['lambda_data_path'], allow_pickle=True) as data:
+                derivatives_per_epoch = data['derivatives_per_epoch']
                 
-                # Each direction should have max_order derivatives
-                if len(first_measurement) > 0:
-                    self.assertLessEqual(len(first_measurement[0]), 6)
+                # Check structure: should be list of (K_dirs x max_order) arrays
+                self.assertGreater(len(derivatives_per_epoch), 0)
+                
+                # Check first measurement
+                first_measurement = derivatives_per_epoch[0]
+                if first_measurement is not None and len(first_measurement) > 0:
+                    # Should have up to K_dirs directions
+                    self.assertLessEqual(len(first_measurement), 5)
+                    
+                    # Each direction should have max_order derivatives
+                    if len(first_measurement) > 0:
+                        self.assertLessEqual(len(first_measurement[0]), 6)
 
 
 class TestMetricsCSV(unittest.TestCase):

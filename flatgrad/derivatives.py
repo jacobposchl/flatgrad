@@ -82,7 +82,7 @@ def compute_directional_derivatives(
     
     # Forward pass through model
     logits = model(inputs)
-    loss_per_sample = loss_fn(logits, labels, reduction='none')  # [B]
+    loss_per_sample = loss_fn(logits, labels)  # [B]
     loss_scalar = loss_per_sample.sum()  # Scalar for autograd
     
     all_derivatives = []

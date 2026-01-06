@@ -5,3 +5,4 @@ numpy==2.4.0
 matplotlib>=3.5.0
 scipy>=1.9.0
 tqdm==4.67.1
+seaborn==0.13.2

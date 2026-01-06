@@ -366,21 +366,21 @@ def adaptive_measurement_schedule(total_epochs: int) -> List[int]:
     for epoch in range(min(11, total_epochs + 1)):
         measurement_epochs.append(epoch)
     
-    # Epochs 11-30: Every 2 epochs
+    # Epochs 11-30: Every 2 epochs (starting at 12)
     if total_epochs > 10:
-        for epoch in range(11, min(31, total_epochs + 1), 2):
+        for epoch in range(12, min(31, total_epochs + 1), 2):
             if epoch not in measurement_epochs:
                 measurement_epochs.append(epoch)
     
-    # Epochs 31-50: Every 5 epochs
+    # Epochs 31-50: Every 5 epochs (starting at 35)
     if total_epochs > 30:
-        for epoch in range(31, min(51, total_epochs + 1), 5):
+        for epoch in range(35, min(51, total_epochs + 1), 5):
             if epoch not in measurement_epochs:
                 measurement_epochs.append(epoch)
     
     # Epochs 50+: Every 10 epochs
     if total_epochs > 50:
-        for epoch in range(51, total_epochs + 1, 10):
+        for epoch in range(55, total_epochs + 1, 10):
             if epoch not in measurement_epochs:
                 measurement_epochs.append(epoch)
     

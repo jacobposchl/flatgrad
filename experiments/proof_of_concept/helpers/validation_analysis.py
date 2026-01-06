@@ -190,15 +190,6 @@ def order_sensitivity_analysis(lambda_data_paths: List[str], output_dir: str):
     output_path = Path(output_dir) / 'order_sensitivity'
     output_path.mkdir(parents=True, exist_ok=True)
     
-    order_configs = [
-        (1, 2, '1-2'),
-        (1, 3, '1-3'),
-        (1, 4, '1-4'),
-        (2, 4, '2-4'),
-        (2, 5, '2-5'),
-        (1, 6, '1-6')
-    ]
-    
     for data_path in lambda_data_paths:
         data = load_lambda_data(data_path)
         
@@ -222,6 +213,27 @@ def order_sensitivity_analysis(lambda_data_paths: List[str], output_dir: str):
         
         if len(final_derivatives) == 0:
             print(f"  No derivatives at final epoch, skipping...")
+            continue
+        
+        # Determine max available order from derivative data
+        max_available_order = min(len(final_derivatives[0]) if len(final_derivatives) > 0 else 0, 6)
+        
+        # Build order configs dynamically based on available data
+        order_configs = []
+        if max_available_order >= 2:
+            order_configs.append((1, 2, '1-2'))
+        if max_available_order >= 3:
+            order_configs.append((1, 3, '1-3'))
+        if max_available_order >= 4:
+            order_configs.append((1, 4, '1-4'))
+            order_configs.append((2, 4, '2-4'))
+        if max_available_order >= 5:
+            order_configs.append((2, 5, '2-5'))
+        if max_available_order >= 6:
+            order_configs.append((1, 6, '1-6'))
+        
+        if len(order_configs) == 0:
+            print(f"  Insufficient derivatives (need at least 2), skipping...")
             continue
         
         # Compute lambda for each order configuration
@@ -373,28 +385,38 @@ def temporal_stability_analysis(lambda_data_paths: List[str], output_dir: str):
             fig, ax = plt.subplots(figsize=(10, 6))
             
             violin_data = []
-            for idx in epoch_indices:
+            valid_positions = []
+            valid_labels = []
+            
+            for i, idx in enumerate(epoch_indices):
                 vals = lambda_values_per_epoch[idx]
-                if len(vals) > 0:
-                    violin_data.append(vals)
-                else:
-                    violin_data.append([np.nan])
+                # Convert to numpy array if needed
+                vals_arr = np.array(vals, dtype=float)
+                # Only include if we have at least 2 valid values for KDE estimation
+                if len(vals_arr) >= 2 and not np.all(np.isnan(vals_arr)):
+                    valid_vals = vals_arr[~np.isnan(vals_arr)]
+                    if len(valid_vals) >= 2:
+                        violin_data.append(valid_vals)
+                        valid_positions.append(i)
+                        valid_labels.append(epoch_labels[i])
             
-            parts = ax.violinplot(violin_data, positions=range(len(epoch_labels)), 
-                                 showmeans=True, showmedians=True)
-            
-            ax.set_xticks(range(len(epoch_labels)))
-            ax.set_xticklabels(epoch_labels)
-            ax.set_ylabel('Lambda Value')
-            ax.set_title(f'Lambda Distribution Evolution: {dataset}/{method_name}')
-            ax.grid(True, alpha=0.3, axis='y')
-            ax.axhline(y=0, color='k', linestyle='--', alpha=0.3)
-            
-            plt.tight_layout()
-            plt.savefig(output_path / f'{dataset}_{method_name}_violin.png', dpi=150)
-            plt.close()
-            
-            print(f"  Saved violin plot")
+            # Only create violin plot if we have valid data
+            if len(violin_data) > 0:
+                parts = ax.violinplot(violin_data, positions=valid_positions, 
+                                     showmeans=True, showmedians=True)
+                
+                ax.set_xticks(valid_positions)
+                ax.set_xticklabels(valid_labels)
+                ax.set_ylabel('Lambda Value')
+                ax.set_title(f'Lambda Distribution Evolution: {dataset}/{method_name}')
+                ax.grid(True, alpha=0.3, axis='y')
+                ax.axhline(y=0, color='k', linestyle='--', alpha=0.3)
+                
+                plt.tight_layout()
+                plt.savefig(output_path / f'{dataset}_{method_name}_violin.png', dpi=150)
+                plt.close()
+                
+                print(f"  Saved violin plot")
 
 
 def joint_K_order_optimization(lambda_data_paths: List[str], output_dir: str):

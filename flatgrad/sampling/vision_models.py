@@ -82,7 +82,7 @@ def create_vision_model(dataset: str, dropout_rate: float = 0.5) -> nn.Module:
     Factory function to create vision models.
     
     Args:
-        dataset: 'mnist' or 'cifar10'
+        dataset: 'mnist', 'mnist_convnet', 'cifar10', or 'cifar10_convnet'
         dropout_rate: Dropout probability (default: 0.5)
     
     Returns:
@@ -94,9 +94,14 @@ def create_vision_model(dataset: str, dropout_rate: float = 0.5) -> nn.Module:
     """
     dataset = dataset.lower()
     
-    if dataset == 'mnist':
+    # Handle both 'mnist' and 'mnist_convnet' formats
+    if dataset in ('mnist', 'mnist_convnet'):
         return MNISTConvNet(dropout_rate=dropout_rate)
-    elif dataset == 'cifar10':
+    elif dataset in ('cifar10', 'cifar10_convnet'):
         return CIFAR10ConvNet(dropout_rate=dropout_rate)
     else:
-        raise ValueError(f"Unknown dataset: {dataset}. Supported: 'mnist', 'cifar10'")
+        raise ValueError(f"Unknown dataset: {dataset}. Supported: 'mnist', 'mnist_convnet', 'cifar10', 'cifar10_convnet'")
+
+
+# Alias for backward compatibility
+get_vision_model = create_vision_model

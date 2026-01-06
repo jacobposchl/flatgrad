@@ -96,8 +96,9 @@ class TestSyntheticLambdaDataGeneration(unittest.TestCase):
             # Verify file exists and can be loaded
             self.assertTrue(filepath.exists())
             
-            loaded = np.load(filepath, allow_pickle=True)
-            self.assertIn('epochs', loaded)
+            # Properly close the numpy file to avoid Windows file locking issues
+            with np.load(filepath, allow_pickle=True) as loaded:
+                self.assertIn('epochs', loaded)
             self.assertIn('lambda_means', loaded)
 
 

@@ -198,7 +198,15 @@ def estimate_lambda_per_direction(
             log_derivatives = []
             valid_samples = torch.ones(batch_size, dtype=torch.bool, device=device)
             
+            # Store derivatives for return (before filtering)
+            stored_derivatives = []
+            
             for n, d_n in enumerate(derivatives):
+                # Store the mean derivative across all samples (not just valid ones)
+                # This is for returning the raw derivative data
+                if return_derivatives:
+                    stored_derivatives.append(d_n.mean().item())
+                
                 # Filter out samples with tiny first derivative
                 if n == 0:
                     valid_samples &= (d_n >= min_first_derivative)
@@ -228,14 +236,7 @@ def estimate_lambda_per_direction(
                     
                     # Store derivatives if requested
                     if return_derivatives:
-                        # Convert derivatives to list of floats for storage
-                        deriv_list = []
-                        for d_n in derivatives:
-                            if valid_samples.sum() > 0:
-                                deriv_list.append(d_n[valid_samples].mean().item())
-                            else:
-                                deriv_list.append(float('nan'))
-                        derivatives_per_direction.append(deriv_list)
+                        derivatives_per_direction.append(stored_derivatives)
 
         except Exception as e:
             # Skip this direction if computation fails

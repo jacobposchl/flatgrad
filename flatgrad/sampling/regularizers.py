@@ -61,7 +61,7 @@ def compute_lambda_regularizer(
         
         # Forward pass
         logits = model(inputs_with_grad)
-        loss_per_sample = loss_fn(logits, labels, reduction='none')  # [B]
+        loss_per_sample = loss_fn(logits, labels)  # [B]
         y_scalar = loss_per_sample.sum()
         
         # Compute derivatives sequentially
@@ -151,7 +151,7 @@ def compute_lambda_target_regularizer(
         
         # Forward pass
         logits = model(inputs_with_grad)
-        loss_per_sample = loss_fn(logits, labels, reduction='none')  # [B]
+        loss_per_sample = loss_fn(logits, labels)  # [B]
         y_scalar = loss_per_sample.sum()
         
         # Compute derivatives sequentially

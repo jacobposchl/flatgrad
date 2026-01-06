@@ -376,20 +376,35 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
                     derivatives_per_dir=history.get('derivatives_per_epoch', [[]])[i]
                 )
     
-    # Initial measurement at epoch 0 if starting from scratch
-    if start_epoch == 0 and 0 in measurement_epochs:
-        print(f"Measuring lambda at epoch 0...")
-        lambda_result = measure_lambda(model, train_loader, device, config.K_dirs, config.max_order, store_full_data=True)
-        if lambda_result['lambda_mean'] is not None:
-            lambda_tracker.record(
-                epoch=0,
-                lambda_mean=lambda_result['lambda_mean'],
-                lambda_std=lambda_result['lambda_std'],
-                lambda_values=lambda_result['lambda_values'],
-                derivatives_per_dir=lambda_result.get('derivatives_per_dir', [])
-            )
-            lambda_means_all_epochs[0] = lambda_result['lambda_mean']
-            lambda_stds_all_epochs[0] = lambda_result['lambda_std']
+    # Initial evaluation at epoch 0 if starting from scratch
+    if start_epoch == 0:
+        print("Evaluating at epoch 0...")
+        # Evaluate untrained model
+        test_metrics_0 = evaluate(model, test_loader, loss_fn, device, compute_calibration=True)
+        train_metrics_0 = evaluate(model, train_loader, loss_fn, device, compute_calibration=False)
+        
+        # Record epoch 0 metrics
+        all_epochs.append(0)
+        train_accuracies.append(train_metrics_0['accuracy'])
+        test_accuracies.append(test_metrics_0['accuracy'])
+        train_losses.append(train_metrics_0['loss'])
+        test_losses.append(test_metrics_0['loss'])
+        eces.append(test_metrics_0.get('ece', 0.0))
+        
+        # Measure lambda at epoch 0 if scheduled
+        if 0 in measurement_epochs:
+            print(f"Measuring lambda at epoch 0...")
+            lambda_result = measure_lambda(model, train_loader, device, config.K_dirs, config.max_order, store_full_data=True)
+            if lambda_result['lambda_mean'] is not None:
+                lambda_tracker.record(
+                    epoch=0,
+                    lambda_mean=lambda_result['lambda_mean'],
+                    lambda_std=lambda_result['lambda_std'],
+                    lambda_values=lambda_result['lambda_values'],
+                    derivatives_per_dir=lambda_result.get('derivatives_per_dir', [])
+                )
+                lambda_means_all_epochs[0] = lambda_result['lambda_mean']
+                lambda_stds_all_epochs[0] = lambda_result['lambda_std']
     
     # Training loop
     for epoch in range(start_epoch, config.epochs):
@@ -508,7 +523,10 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
     print(f"\nExperiment completed!")
     print(f"Results saved to: {exp_dir}")
     print(f"Final test accuracy: {final_results['final_test_accuracy']:.4f}")
-    print(f"Final lambda: {final_results['final_lambda_mean']:.4f} ± {final_results['final_lambda_std']:.4f}")
+    if final_results['final_lambda_mean'] is not None:
+        print(f"Final lambda: {final_results['final_lambda_mean']:.4f} ± {final_results['final_lambda_std']:.4f}")
+    else:
+        print(f"Final lambda: No measurements recorded")
     
     return {
         'config': config,
