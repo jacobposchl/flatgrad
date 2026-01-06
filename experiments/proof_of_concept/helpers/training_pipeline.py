@@ -148,7 +148,7 @@ def load_checkpoint(checkpoint_path: str, model: nn.Module, optimizer) -> dict:
     if not os.path.exists(checkpoint_path):
         return None
     
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, weights_only=False)  # weights_only=False for PyTorch 2.6 compatibility
     model.load_state_dict(checkpoint['model_state_dict'])
     
     # Handle SAM optimizer
