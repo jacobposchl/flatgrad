@@ -346,23 +346,25 @@ These analyses collectively answer:
 - **Target performance**: Baseline 85-92%, Best methods 93-96%
 
 #### CIFAR10 Configuration  
-- **Learning rate**: 0.003 (3x higher than MNIST, balanced to prevent overfitting)
-- **Epochs**: 100 (2x longer than MNIST)
+- **Learning rate**: 0.001 (same as MNIST - slower learning prevents memorization)
+- **Epochs**: 80 (shorter than original 150 to prevent complete overfitting)
 - **Batch size**: 128
-- **Subset size**: 10000 train / 1000 test (20% of full dataset)
+- **Subset size**: 20000 train / 2000 test (40% of full dataset)
 - **LR scheduler**: Cosine annealing (smooth convergence)
-- **Target performance**: Baseline 60-70%, Best methods 75-82%
+- **Target performance**: Baseline train 80-90%, test 65-75% (gap ~10-15%)
 
 **Rationale**: 
 - Different datasets require different training regimes to reach similar **relative performance zones**
 - We want both datasets to show:
-  - Baseline that has moderate overfitting (5-15% train-test gap)
+  - Baseline that has moderate overfitting (10-15% train-test gap, NOT 100% train accuracy)
   - Clear separation between regularization methods (10-15% accuracy range)
   - Room for λ to correlate with performance variation
 - **MNIST**: Reduced from 5000→1000 training samples to prevent ceiling effects where all methods achieve 98-99%
-- **CIFAR10**: Uses 10,000 samples (20% of dataset) with moderate LR (0.003) to balance learning vs overfitting
-  - Previous attempt with 5000 samples + LR=0.01 caused severe overfitting (100% train, 50% test)
-  - Current settings target 60-70% baseline test accuracy with visible but not catastrophic overfitting
+- **CIFAR10**: Uses 20,000 samples (40% of dataset) with matched LR (0.001) and reduced epochs (80)
+  - **Why more data?** More samples make it harder for the model to memorize completely
+  - **Why same LR as MNIST?** Slower learning prevents rapid overfitting to training noise
+  - **Why fewer epochs?** Stops training before model can achieve 100% train accuracy
+  - **Target**: Train 80-90%, Test 65-75% (healthy 10-15% gap showing overfitting is present but not catastrophic)
 
 **Scientific validity**: We're not comparing MNIST vs CIFAR10 performance. We're asking:
 - "Within MNIST: Does λ correlate with generalization?"

@@ -129,10 +129,10 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
             test_size = 1000
             use_scheduler = False
         else:  # cifar10
-            base_lr = 0.003  # Moderate LR to prevent overfitting on small subset
-            base_epochs = 100  # Balanced epochs for 10k samples
-            train_size = 10000  # Increased from 5000 to reduce overfitting
-            test_size = 1000
+            base_lr = 0.001  # Same as MNIST to slow down learning
+            base_epochs = 80  # Reduced to prevent complete memorization
+            train_size = 20000  # Increased to 40% of dataset (harder to memorize)
+            test_size = 2000
             use_scheduler = True  # Use cosine annealing for CIFAR10
         
         # 1. Baseline (no regularization)
