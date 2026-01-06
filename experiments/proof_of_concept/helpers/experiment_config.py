@@ -55,6 +55,7 @@ class ExperimentConfig:
     batch_size: int = 128
     lr: float = 0.001
     optimizer: str = 'adam'
+    use_lr_scheduler: bool = False  # Whether to use cosine annealing LR scheduler
     
     # Regularization parameters
     regularization_type: str = 'none'
@@ -100,6 +101,11 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
     """
     Generate all experiment configurations for proof-of-concept experiments.
     
+    Uses dataset-specific hyperparameters to ensure both datasets operate in the 
+    "Goldilocks zone" where regularization effects are observable:
+    - MNIST: Reduced subset (1000 train) to prevent ceiling effect
+    - CIFAR10: Higher LR, more epochs, and LR scheduling for better convergence
+    
     Args:
         dataset: Which dataset(s) to generate configs for ('mnist', 'cifar10', or 'both')
     
@@ -115,12 +121,31 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
     configs = []
     
     for ds_name, model_type in datasets_to_run:
+        # Dataset-specific hyperparameters
+        if ds_name == 'mnist':
+            base_lr = 0.001
+            base_epochs = 50
+            train_size = 1000  # Reduced from 5000 to prevent ceiling effect
+            test_size = 1000
+            use_scheduler = False
+        else:  # cifar10
+            base_lr = 0.01  # 10x higher for CIFAR10
+            base_epochs = 150  # 3x longer for CIFAR10
+            train_size = 5000
+            test_size = 1000
+            use_scheduler = True  # Use cosine annealing for CIFAR10
+        
         # 1. Baseline (no regularization)
         configs.append(ExperimentConfig(
             method_name='baseline',
             dataset=ds_name,
             model_type=model_type,
-            regularization_type='none'
+            regularization_type='none',
+            lr=base_lr,
+            epochs=base_epochs,
+            train_subset_size=train_size,
+            test_subset_size=test_size,
+            use_lr_scheduler=use_scheduler
         ))
         
         # 2. Dropout (3 rates: 0.3, 0.5, 0.7)
@@ -130,7 +155,12 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
                 dataset=ds_name,
                 model_type=model_type,
                 regularization_type='dropout',
-                dropout_rate=dropout_rate
+                dropout_rate=dropout_rate,
+                lr=base_lr,
+                epochs=base_epochs,
+                train_subset_size=train_size,
+                test_subset_size=test_size,
+                use_lr_scheduler=use_scheduler
             ))
         
         # 3. Weight Decay (3 scales: 0.0001, 0.001, 0.01)
@@ -140,7 +170,12 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
                 dataset=ds_name,
                 model_type=model_type,
                 regularization_type='weight_decay',
-                weight_decay=wd
+                weight_decay=wd,
+                lr=base_lr,
+                epochs=base_epochs,
+                train_subset_size=train_size,
+                test_subset_size=test_size,
+                use_lr_scheduler=use_scheduler
             ))
         
         # 4. Data Augmentation
@@ -149,7 +184,12 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
             dataset=ds_name,
             model_type=model_type,
             regularization_type='augmentation',
-            use_augmentation=True
+            use_augmentation=True,
+            lr=base_lr,
+            epochs=base_epochs,
+            train_subset_size=train_size,
+            test_subset_size=test_size,
+            use_lr_scheduler=use_scheduler
         ))
         
         # 5. Label Smoothing (3 values: 0.05, 0.1, 0.15)
@@ -159,7 +199,12 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
                 dataset=ds_name,
                 model_type=model_type,
                 regularization_type='label_smoothing',
-                label_smoothing=smoothing
+                label_smoothing=smoothing,
+                lr=base_lr,
+                epochs=base_epochs,
+                train_subset_size=train_size,
+                test_subset_size=test_size,
+                use_lr_scheduler=use_scheduler
             ))
         
         # 6. SAM (3 rho values: 0.05, 0.1, 0.2)
@@ -169,7 +214,12 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
                 dataset=ds_name,
                 model_type=model_type,
                 regularization_type='sam',
-                sam_rho=rho
+                sam_rho=rho,
+                lr=base_lr,
+                epochs=base_epochs,
+                train_subset_size=train_size,
+                test_subset_size=test_size,
+                use_lr_scheduler=use_scheduler
             ))
         
         # 7. Input Gradient Penalty (3 scales: 0.01, 0.1, 1.0)
@@ -179,7 +229,12 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
                 dataset=ds_name,
                 model_type=model_type,
                 regularization_type='igp',
-                igp_scale=scale
+                igp_scale=scale,
+                lr=base_lr,
+                epochs=base_epochs,
+                train_subset_size=train_size,
+                test_subset_size=test_size,
+                use_lr_scheduler=use_scheduler
             ))
     
     return configs

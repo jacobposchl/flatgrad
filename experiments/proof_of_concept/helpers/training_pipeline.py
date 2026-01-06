@@ -93,7 +93,7 @@ def setup_model_and_optimizer(config: ExperimentConfig, device: torch.device) ->
         device: Device to place model on
     
     Returns:
-        Tuple of (model, optimizer, loss_fn, is_sam)
+        Tuple of (model, optimizer, loss_fn, is_sam, lr_scheduler)
     """
     # Create model
     model = get_vision_model(config.model_type, dropout_rate=config.dropout_rate)
@@ -109,6 +109,20 @@ def setup_model_and_optimizer(config: ExperimentConfig, device: torch.device) ->
     }
     optimizer, is_sam = get_optimizer_with_config(model, optimizer_config)
     
+    # Create learning rate scheduler
+    lr_scheduler = None
+    if config.use_lr_scheduler:
+        # Use cosine annealing scheduler
+        if is_sam:
+            # For SAM, wrap the base optimizer
+            lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer.optimizer, T_max=config.epochs
+            )
+        else:
+            lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=config.epochs
+            )
+    
     # Create loss function
     if config.label_smoothing > 0:
         num_classes = 10  # Both MNIST and CIFAR-10 have 10 classes
@@ -116,7 +130,7 @@ def setup_model_and_optimizer(config: ExperimentConfig, device: torch.device) ->
     else:
         loss_fn = nn.CrossEntropyLoss()
     
-    return model, optimizer, loss_fn, is_sam
+    return model, optimizer, loss_fn, is_sam, lr_scheduler
 
 
 def load_checkpoint(checkpoint_path: str, model: nn.Module, optimizer) -> dict:
@@ -323,7 +337,7 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
     train_loader, test_loader = setup_data_loaders(config)
     
     # Set up model and optimizer
-    model, optimizer, loss_fn, is_sam = setup_model_and_optimizer(config, device)
+    model, optimizer, loss_fn, is_sam, lr_scheduler = setup_model_and_optimizer(config, device)
     
     # Set up IGP regularizer if needed
     igp_regularizer = None
@@ -416,6 +430,10 @@ def run_single_experiment(config: ExperimentConfig, output_dir: str,
         
         # Evaluate
         test_metrics = evaluate(model, test_loader, loss_fn, device, compute_calibration=True)
+        
+        # Step learning rate scheduler if using
+        if lr_scheduler is not None:
+            lr_scheduler.step()
         
         # Record metrics
         all_epochs.append(epoch + 1)

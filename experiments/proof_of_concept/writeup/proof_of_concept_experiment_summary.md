@@ -333,12 +333,43 @@ These analyses collectively answer:
 
 ## Implementation Details
 
-### Training Configuration
-- **Epochs**: 100 per experiment
-- **Optimizer**: Adam (lr=0.001)
-- **Batch size**: 64 (unless changed)
-- **Device**: CUDA
-- **Random seed**: 42 for reproducibility
+### Hyperparameter Strategy
+
+**Design Choice**: We use **dataset-specific hyperparameters** to ensure both datasets operate in the "Goldilocks zone" where regularization effects are observable.
+
+#### MNIST Configuration
+- **Learning rate**: 0.001
+- **Epochs**: 50
+- **Batch size**: 128
+- **Subset size**: 1000 train / 1000 test (reduced to prevent ceiling effect)
+- **LR scheduler**: None
+- **Target performance**: Baseline 85-92%, Best methods 93-96%
+
+#### CIFAR10 Configuration  
+- **Learning rate**: 0.01 (10x higher than MNIST)
+- **Epochs**: 150 (3x longer than MNIST)
+- **Batch size**: 128
+- **Subset size**: 5000 train / 1000 test
+- **LR scheduler**: Cosine annealing (prevents underfitting)
+- **Target performance**: Baseline 65-75%, Best methods 78-85%
+
+**Rationale**: 
+- Different datasets require different training regimes to reach similar **relative performance zones**
+- We want both datasets to show:
+  - Baseline that overfits (train-test gap exists)
+  - Clear separation between regularization methods (10-15% accuracy range)
+  - Room for λ to correlate with performance variation
+- MNIST is reduced from 5000→1000 training samples to prevent ceiling effects where all methods achieve 98-99%
+- CIFAR10 uses higher learning rate and more epochs to prevent floor effects where all methods fail to learn
+
+**Scientific validity**: We're not comparing MNIST vs CIFAR10 performance. We're asking:
+- "Within MNIST: Does λ correlate with generalization?"
+- "Within CIFAR10: Does λ correlate with generalization?"  
+- "Across datasets: Do these correlations show consistent patterns?"
+
+**Optimizer**: Adam for all experiments
+**Device**: CUDA (if available)
+**Random seed**: 42 for reproducibility
 
 ### Lambda Measurement Parameters
 - **K_dirs**: 15 random directions per measurement (enables post-hoc convergence analysis)
@@ -347,6 +378,7 @@ These analyses collectively answer:
   - Epochs 0-10: Every epoch
   - Epochs 11-30: Every 2 epochs  
   - Epochs 31-50: Every 5 epochs
+  - Epochs 50+: Every 10 epochs
 - **Data retention**: Store all 15 individual directions with all derivatives (orders 1-6) at each measurement
 
 
