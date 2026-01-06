@@ -169,36 +169,73 @@ def evaluate(
 
 class LambdaTracker:
     """
-    Tracks lambda evolution during training.
+    Tracks lambda evolution during training with full per-direction data retention.
     
     Example:
-        >>> tracker = LambdaTracker()
-        >>> tracker.record(epoch=0, lambda_mean=0.45, lambda_std=0.12)
-        >>> tracker.record(epoch=1, lambda_mean=0.42, lambda_std=0.10)
+        >>> tracker = LambdaTracker(store_full_data=True)
+        >>> tracker.record(epoch=0, lambda_mean=0.45, lambda_std=0.12, 
+        ...                lambda_values=[0.4, 0.5, 0.45], derivatives_per_dir=[[...], [...], [...]])
         >>> tracker.get_history()
     """
     
-    def __init__(self):
+    def __init__(self, store_full_data: bool = False):
+        """
+        Args:
+            store_full_data: If True, stores all per-direction lambda values and derivatives.
+                            If False, only stores aggregate statistics (mean/std).
+        """
         self.epochs = []
         self.lambda_means = []
         self.lambda_stds = []
         self.timestamps = []
+        self.store_full_data = store_full_data
+        
+        # Full data storage (only used if store_full_data=True)
+        self.lambda_values_per_epoch = []  # List of lists: [[dir1_lambda, dir2_lambda, ...], ...]
+        self.derivatives_per_epoch = []    # List of lists of lists: [[[dir1_order1, dir1_order2, ...], [dir2_order1, ...]], ...]
     
-    def record(self, epoch: int, lambda_mean: float, lambda_std: float):
-        """Record lambda statistics for an epoch."""
+    def record(self, epoch: int, lambda_mean: float, lambda_std: float, 
+               lambda_values: list = None, derivatives_per_dir: list = None):
+        """
+        Record lambda statistics for an epoch.
+        
+        Args:
+            epoch: Training epoch
+            lambda_mean: Mean lambda across directions
+            lambda_std: Standard deviation of lambda
+            lambda_values: List of lambda values (one per direction). Only stored if store_full_data=True.
+            derivatives_per_dir: List of derivative lists (one per direction). Only stored if store_full_data=True.
+        """
         self.epochs.append(epoch)
         self.lambda_means.append(lambda_mean)
         self.lambda_stds.append(lambda_std)
         self.timestamps.append(time.time())
+        
+        if self.store_full_data:
+            if lambda_values is not None:
+                self.lambda_values_per_epoch.append(lambda_values)
+            else:
+                self.lambda_values_per_epoch.append([])
+            
+            if derivatives_per_dir is not None:
+                self.derivatives_per_epoch.append(derivatives_per_dir)
+            else:
+                self.derivatives_per_epoch.append([])
     
     def get_history(self) -> Dict[str, List]:
         """Get complete tracking history."""
-        return {
+        history = {
             'epochs': self.epochs,
             'lambda_means': self.lambda_means,
             'lambda_stds': self.lambda_stds,
             'timestamps': self.timestamps
         }
+        
+        if self.store_full_data:
+            history['lambda_values_per_epoch'] = self.lambda_values_per_epoch
+            history['derivatives_per_epoch'] = self.derivatives_per_epoch
+        
+        return history
     
     def get_latest(self) -> Optional[Dict[str, float]]:
         """Get most recent lambda statistics."""
@@ -308,3 +345,143 @@ class RegTracker:
             print(f"Mean Reg Ratio: {np.mean(self.reg_ratios):.6f}")
             print(f"Max Reg Ratio: {np.max(self.reg_ratios):.6f}")
         print("="*60 + "\n")
+
+
+def adaptive_measurement_schedule(total_epochs: int) -> List[int]:
+    """
+    Generate adaptive lambda measurement schedule.
+    
+    Measures more frequently early in training when lambda changes rapidly,
+    less frequently later when lambda has stabilized.
+    
+    Args:
+        total_epochs: Total number of training epochs
+    
+    Returns:
+        List of epoch numbers when lambda should be measured
+    """
+    measurement_epochs = []
+    
+    # Epochs 0-10: Every epoch (dense early tracking)
+    for epoch in range(min(11, total_epochs + 1)):
+        measurement_epochs.append(epoch)
+    
+    # Epochs 11-30: Every 2 epochs
+    if total_epochs > 10:
+        for epoch in range(11, min(31, total_epochs + 1), 2):
+            if epoch not in measurement_epochs:
+                measurement_epochs.append(epoch)
+    
+    # Epochs 31-50: Every 5 epochs
+    if total_epochs > 30:
+        for epoch in range(31, min(51, total_epochs + 1), 5):
+            if epoch not in measurement_epochs:
+                measurement_epochs.append(epoch)
+    
+    # Epochs 50+: Every 10 epochs
+    if total_epochs > 50:
+        for epoch in range(51, total_epochs + 1, 10):
+            if epoch not in measurement_epochs:
+                measurement_epochs.append(epoch)
+    
+    return sorted(measurement_epochs)
+
+
+def save_lambda_data(tracker: LambdaTracker, output_path: str, 
+                     train_accuracies: List[float] = None,
+                     test_accuracies: List[float] = None,
+                     train_losses: List[float] = None,
+                     test_losses: List[float] = None):
+    """
+    Save lambda tracking data to .npz file for post-hoc analysis.
+    
+    Args:
+        tracker: LambdaTracker with recorded data
+        output_path: Path to save .npz file (should end in .npz)
+        train_accuracies: List of train accuracies corresponding to measurement epochs
+        test_accuracies: List of test accuracies corresponding to measurement epochs
+        train_losses: List of train losses corresponding to measurement epochs
+        test_losses: List of test losses corresponding to measurement epochs
+    """
+    import os
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    history = tracker.get_history()
+    
+    # Prepare data dictionary
+    data = {
+        'epochs': np.array(history['epochs']),
+        'lambda_means': np.array(history['lambda_means']),
+        'lambda_stds': np.array(history['lambda_stds']),
+        'timestamps': np.array(history['timestamps']),
+    }
+    
+    # Add optional metrics if provided
+    if train_accuracies is not None:
+        data['train_accuracies'] = np.array(train_accuracies)
+    if test_accuracies is not None:
+        data['test_accuracies'] = np.array(test_accuracies)
+    if train_losses is not None:
+        data['train_losses'] = np.array(train_losses)
+    if test_losses is not None:
+        data['test_losses'] = np.array(test_losses)
+    
+    # Add full data if available
+    if tracker.store_full_data:
+        # Convert lists of lists to arrays
+        # lambda_values_per_epoch: list of lists (variable length per epoch)
+        # derivatives_per_epoch: list of lists of lists
+        
+        # Store as object arrays to handle variable-length data
+        data['lambda_values_per_epoch'] = np.array(history['lambda_values_per_epoch'], dtype=object)
+        data['derivatives_per_epoch'] = np.array(history['derivatives_per_epoch'], dtype=object)
+    
+    np.savez(output_path, **data)
+
+
+def save_training_metrics(epochs: List[int], 
+                          train_accuracies: List[float],
+                          test_accuracies: List[float],
+                          train_losses: List[float],
+                          test_losses: List[float],
+                          output_path: str,
+                          eces: List[float] = None,
+                          lambda_means: List[float] = None,
+                          lambda_stds: List[float] = None):
+    """
+    Save epoch-by-epoch training metrics to CSV file.
+    
+    Args:
+        epochs: List of epoch numbers
+        train_accuracies: Training accuracies
+        test_accuracies: Test accuracies
+        train_losses: Training losses
+        test_losses: Test losses
+        output_path: Path to save CSV file
+        eces: Expected calibration errors (optional)
+        lambda_means: Lambda mean values (optional)
+        lambda_stds: Lambda std values (optional)
+    """
+    import pandas as pd
+    import os
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    data = {
+        'epoch': epochs,
+        'train_accuracy': train_accuracies,
+        'test_accuracy': test_accuracies,
+        'train_loss': train_losses,
+        'test_loss': test_losses,
+        'generalization_gap': [train_acc - test_acc for train_acc, test_acc in zip(train_accuracies, test_accuracies)]
+    }
+    
+    if eces is not None:
+        data['ece'] = eces
+    if lambda_means is not None:
+        data['lambda_mean'] = lambda_means
+    if lambda_stds is not None:
+        data['lambda_std'] = lambda_stds
+    
+    df = pd.DataFrame(data)
+    df.to_csv(output_path, index=False)

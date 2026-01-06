@@ -133,6 +133,7 @@ def estimate_lambda_per_direction(
     max_order: int = 4,
     K_dirs: int = 5,
     min_first_derivative: float = 1e-8,
+    return_derivatives: bool = False,
 ) -> dict:
     """
     Estimate λ by computing it separately for each random direction, then aggregating.
@@ -148,6 +149,7 @@ def estimate_lambda_per_direction(
         max_order: Maximum derivative order (default: 4)
         K_dirs: Number of random directions (default: 5)
         min_first_derivative: Minimum first derivative threshold (default: 1e-8)
+        return_derivatives: If True, also return all derivatives per direction
     
     Returns:
         Dictionary containing:
@@ -155,6 +157,7 @@ def estimate_lambda_per_direction(
             - 'lambda_std': Standard deviation of λ
             - 'lambda_values': List of λ values (one per direction)
             - 'n_valid_directions': Number of directions that yielded valid λ
+            - 'derivatives_per_dir': List of derivative lists (only if return_derivatives=True)
 
     """
     # Save training state and switch to eval mode
@@ -166,6 +169,7 @@ def estimate_lambda_per_direction(
     device = inputs.device
     
     lambda_values_per_direction = []
+    derivatives_per_direction = []
     
     # Compute λ for each direction independently
     for dir_idx in range(K_dirs):
@@ -221,6 +225,17 @@ def estimate_lambda_per_direction(
                 
                 if np.isfinite(slope):
                     lambda_values_per_direction.append(slope)
+                    
+                    # Store derivatives if requested
+                    if return_derivatives:
+                        # Convert derivatives to list of floats for storage
+                        deriv_list = []
+                        for d_n in derivatives:
+                            if valid_samples.sum() > 0:
+                                deriv_list.append(d_n[valid_samples].mean().item())
+                            else:
+                                deriv_list.append(float('nan'))
+                        derivatives_per_direction.append(deriv_list)
 
         except Exception as e:
             # Skip this direction if computation fails
@@ -233,18 +248,26 @@ def estimate_lambda_per_direction(
     
     # Aggregate results
     if len(lambda_values_per_direction) == 0:
-        return {
+        result = {
             'lambda_mean': None,
             'lambda_std': None,
             'lambda_values': [],
             'n_valid_directions': 0
         }
+        if return_derivatives:
+            result['derivatives_per_dir'] = []
+        return result
     
     lambda_values_array = np.array(lambda_values_per_direction)
     
-    return {
+    result = {
         'lambda_mean': float(np.mean(lambda_values_array)),
         'lambda_std': float(np.std(lambda_values_array, ddof=1 if len(lambda_values_array) > 1 else 0)),
         'lambda_values': lambda_values_per_direction,
         'n_valid_directions': len(lambda_values_per_direction)
     }
+    
+    if return_derivatives:
+        result['derivatives_per_dir'] = derivatives_per_direction
+    
+    return result
