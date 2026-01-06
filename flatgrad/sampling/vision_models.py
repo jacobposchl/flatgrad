@@ -48,6 +48,47 @@ class MNISTConvNet(nn.Module):
         return x
 
 
+class MNISTMLP(nn.Module):
+    """
+    Large MLP for MNIST - designed to overfit without regularization.
+    
+    Uses larger hidden layers to create high model capacity. Without
+    regularization, this model will overfit on moderate-sized datasets,
+    creating room for regularization methods to show their benefits.
+    
+    Architecture:
+        Flatten(784) -> FC(784 -> 1024) -> ReLU -> Dropout(configurable)
+        FC(1024 -> 512) -> ReLU -> Dropout(configurable)
+        FC(512 -> 256) -> ReLU
+        FC(256 -> 10)
+    
+    Parameters: ~1.3M (high capacity for 28x28 images)
+    Expected: Overfits on 5k samples without regularization
+    """
+    
+    def __init__(self, dropout_rate: float = 0.0):
+        super().__init__()
+        self.fc1 = nn.Linear(784, 1024)
+        self.fc2 = nn.Linear(1024, 512)
+        self.fc3 = nn.Linear(512, 256)
+        self.fc4 = nn.Linear(256, 10)
+        
+        # Store dropout rate for inspection
+        self.dropout_rate = dropout_rate
+        self.dropout = nn.Dropout(dropout_rate)
+    
+    def forward(self, x):
+        # Input: [B, 1, 28, 28]
+        x = x.view(x.size(0), -1)  # [B, 784]
+        x = F.relu(self.fc1(x))  # [B, 1024]
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x))  # [B, 512]
+        x = self.dropout(x)
+        x = F.relu(self.fc3(x))  # [B, 256]
+        x = self.fc4(x)  # [B, 10]
+        return x
+
+
 class CIFAR10MLP(nn.Module):
     """
     Simple MLP for CIFAR-10 (32x32 RGB images).
@@ -142,27 +183,29 @@ def create_vision_model(dataset: str, dropout_rate: float = 0.5) -> nn.Module:
     Factory function to create vision models.
     
     Args:
-        dataset: 'mnist', 'mnist_convnet', 'cifar10', 'cifar10_convnet', or 'cifar10_mlp'
+        dataset: 'mnist', 'mnist_convnet', 'mnist_mlp', 'cifar10', 'cifar10_convnet', or 'cifar10_mlp'
         dropout_rate: Dropout probability (default: 0.5)
     
     Returns:
         Neural network model
     
     Example:
-        >>> model = create_vision_model('mnist')
-        >>> model = create_vision_model('cifar10_mlp', dropout_rate=0.3)  # Use MLP instead of CNN
+        >>> model = create_vision_model('mnist_mlp', dropout_rate=0.0)  # Baseline with no dropout
+        >>> model = create_vision_model('mnist_mlp', dropout_rate=0.5)  # With dropout regularization
     """
     dataset = dataset.lower()
     
-    # Handle both 'mnist' and 'mnist_convnet' formats
-    if dataset in ('mnist', 'mnist_convnet'):
+    # Handle MNIST models
+    if dataset == 'mnist_convnet':
         return MNISTConvNet(dropout_rate=dropout_rate)
+    elif dataset in ('mnist', 'mnist_mlp'):
+        return MNISTMLP(dropout_rate=dropout_rate)
     elif dataset in ('cifar10', 'cifar10_convnet'):
         return CIFAR10ConvNet(dropout_rate=dropout_rate)
     elif dataset == 'cifar10_mlp':
         return CIFAR10MLP(dropout_rate=dropout_rate)
     else:
-        raise ValueError(f"Unknown dataset: {dataset}. Supported: 'mnist', 'mnist_convnet', 'cifar10', 'cifar10_convnet', 'cifar10_mlp'")
+        raise ValueError(f"Unknown dataset: {dataset}. Supported: 'mnist', 'mnist_convnet', 'mnist_mlp', 'cifar10', 'cifar10_convnet', 'cifar10_mlp'")
 
 
 # Alias for backward compatibility

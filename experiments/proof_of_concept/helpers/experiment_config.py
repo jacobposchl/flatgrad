@@ -114,7 +114,7 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
     """
     datasets_to_run = []
     if dataset in ['mnist', 'both']:
-        datasets_to_run.append(('mnist', 'mnist_convnet'))
+        datasets_to_run.append(('mnist', 'mnist_mlp'))  # Use large MLP to enable overfitting
     if dataset in ['cifar10', 'both']:
         datasets_to_run.append(('cifar10', 'cifar10_mlp'))  # Use MLP instead of CNN
     
@@ -124,8 +124,8 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
         # Dataset-specific hyperparameters
         if ds_name == 'mnist':
             base_lr = 0.001
-            base_epochs = 50
-            train_size = 1000  # Reduced from 5000 to prevent ceiling effect
+            base_epochs = 100  # Increased from 50 to allow overfitting
+            train_size = 5000  # Realistic dataset size
             test_size = 1000
             use_scheduler = False
         else:  # cifar10
