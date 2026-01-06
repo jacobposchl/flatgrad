@@ -346,20 +346,20 @@ These analyses collectively answer:
 - **Target performance**: Baseline 85-92%, Best methods 93-96%
 
 #### CIFAR10 Configuration  
-- **Model**: Simple MLP (not CNN) - 3072 → 512 → 256 → 10
+- **Model**: Smaller MLP (not CNN) - 3072 → 256 → 128 → 10
 - **Learning rate**: 0.001 (same as MNIST)
-- **Epochs**: 80
+- **Epochs**: 50 (same as MNIST for consistency)
 - **Batch size**: 128
-- **Subset size**: 10000 train / 2000 test (20% of full dataset)
-- **LR scheduler**: Cosine annealing
-- **Target performance**: Baseline train 70-80%, test 55-65% (gap ~15-20%)
+- **Subset size**: 5000 train / 1000 test (10% of full dataset)
+- **LR scheduler**: None (disabled for faster experiments)
+- **Target performance**: Baseline train 75-85%, test 50-60% (gap ~20-25%)
 
-**Why MLP instead of CNN?**
-- CNNs are too powerful for CIFAR10, achieving 100% train accuracy (complete memorization)
-- MLPs have much lower capacity (~0.5M params vs ~1.5M for CNN)
-- MLPs struggle more with spatial patterns → harder to achieve perfect train accuracy
-- Still learns meaningful patterns, just not as well → creates performance spread for testing λ
-- **Faster training** (~2-3x faster than CNN)
+**Why smaller MLP?**
+- Even the 512→256 MLP was too powerful, achieving 99% train accuracy at epoch 18
+- Reduced to 256→128 (~800k params, half of previous size)
+- Removed BatchNorm (helps prevent overfitting)
+- Reduced dataset to 5k samples (10% of CIFAR10)
+- **Result**: Model forced to generalize earlier, can't memorize all training data
 
 **Rationale**: 
 - Different datasets require different training regimes to reach similar **relative performance zones**
@@ -368,12 +368,13 @@ These analyses collectively answer:
   - Clear separation between regularization methods (10-15% accuracy range)
   - Room for λ to correlate with performance variation
 - **MNIST**: Reduced from 5000→1000 training samples to prevent ceiling effects where all methods achieve 98-99%
-- **CIFAR10**: Uses simple **MLP** (not CNN) with 10,000 samples (20% of dataset)
-  - **Why MLP not CNN?** CNNs too powerful → achieved 100% train accuracy even with 40k samples
-  - **Lower model capacity** → MLP struggles with spatial patterns, preventing memorization
-  - **Faster training** → 2-3x faster than CNN (fewer parameters, no convolutions)
-  - **Still learns patterns** → Can reach 55-65% test accuracy (vs random 10%)
-  - **Target**: Train 70-80%, Test 55-65% (healthy 15-20% gap for regularization to reduce)
+- **CIFAR10**: Uses **small MLP** (256→128, not CNN) with 5,000 samples (10% of dataset)
+  - **Why such a small MLP?** Even 512→256 MLP achieved 99% train accuracy by epoch 18
+  - **Half the size**: 256→128 architecture (~800k params vs 1.6M for larger MLP)
+  - **No BatchNorm**: Removed to reduce regularization and let overfitting be more visible
+  - **Smaller dataset**: 5k samples (10%) instead of 10k - easier to see overfitting
+  - **Same epochs as MNIST**: 50 epochs for consistency across datasets
+  - **Target**: Train 75-85%, Test 50-60% (healthy 20-25% gap for regularization to reduce)
 
 **Scientific validity**: We're not comparing MNIST vs CIFAR10 performance. We're asking:
 - "Within MNIST: Does λ correlate with generalization?"

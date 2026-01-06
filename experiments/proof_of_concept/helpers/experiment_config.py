@@ -130,10 +130,10 @@ def get_all_experiment_configs(dataset: str = 'both') -> list[ExperimentConfig]:
             use_scheduler = False
         else:  # cifar10
             base_lr = 0.001  # Same as MNIST
-            base_epochs = 80  # Longer training for MLP
-            train_size = 10000  # 20% of dataset - enough for MLP to learn without memorizing
-            test_size = 2000
-            use_scheduler = True  # Use cosine annealing for CIFAR10
+            base_epochs = 50  # Shorter - MLP still learns too fast
+            train_size = 5000  # Reduced from 10k - smaller MLP needs less data
+            test_size = 1000
+            use_scheduler = False  # Disable scheduler for faster experiments
         
         # 1. Baseline (no regularization)
         configs.append(ExperimentConfig(

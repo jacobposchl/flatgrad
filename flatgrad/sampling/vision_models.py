@@ -59,20 +59,19 @@ class CIFAR10MLP(nn.Module):
     - Still capable of learning meaningful patterns
     
     Architecture:
-        Flatten(3072) -> FC(3072 -> 512) -> BN -> ReLU -> Dropout
-        FC(512 -> 256) -> BN -> ReLU -> Dropout
-        FC(256 -> 10)
+        Flatten(3072) -> FC(3072 -> 256) -> ReLU -> Dropout
+        FC(256 -> 128) -> ReLU -> Dropout
+        FC(128 -> 10)
     
-    Expected accuracy: ~55-65% on CIFAR-10 (much lower than CNN's 80-85%)
+    Parameters: ~800k (vs CNN's ~1.5M)
+    Expected accuracy: ~50-60% on CIFAR-10 (much lower than CNN's 80-85%)
     """
     
     def __init__(self, dropout_rate: float = 0.5):
         super().__init__()
-        self.fc1 = nn.Linear(3 * 32 * 32, 512)  # Flatten CIFAR-10 images
-        self.bn1 = nn.BatchNorm1d(512)
-        self.fc2 = nn.Linear(512, 256)
-        self.bn2 = nn.BatchNorm1d(256)
-        self.fc3 = nn.Linear(256, 10)
+        self.fc1 = nn.Linear(3 * 32 * 32, 256)  # Reduced from 512
+        self.fc2 = nn.Linear(256, 128)  # Reduced from 256
+        self.fc3 = nn.Linear(128, 10)
         
         # Store dropout rate for inspection
         self.dropout_rate = dropout_rate
@@ -81,9 +80,9 @@ class CIFAR10MLP(nn.Module):
     def forward(self, x):
         # Input: [B, 3, 32, 32]
         x = x.view(x.size(0), -1)  # [B, 3072]
-        x = F.relu(self.bn1(self.fc1(x)))  # [B, 512]
+        x = F.relu(self.fc1(x))  # [B, 256]
         x = self.dropout(x)
-        x = F.relu(self.bn2(self.fc2(x)))  # [B, 256]
+        x = F.relu(self.fc2(x))  # [B, 128]
         x = self.dropout(x)
         x = self.fc3(x)  # [B, 10]
         return x
