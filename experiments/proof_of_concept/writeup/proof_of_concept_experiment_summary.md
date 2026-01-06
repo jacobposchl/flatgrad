@@ -346,21 +346,23 @@ These analyses collectively answer:
 - **Target performance**: Baseline 85-92%, Best methods 93-96%
 
 #### CIFAR10 Configuration  
-- **Learning rate**: 0.01 (10x higher than MNIST)
-- **Epochs**: 150 (3x longer than MNIST)
+- **Learning rate**: 0.003 (3x higher than MNIST, balanced to prevent overfitting)
+- **Epochs**: 100 (2x longer than MNIST)
 - **Batch size**: 128
-- **Subset size**: 5000 train / 1000 test
-- **LR scheduler**: Cosine annealing (prevents underfitting)
-- **Target performance**: Baseline 65-75%, Best methods 78-85%
+- **Subset size**: 10000 train / 1000 test (20% of full dataset)
+- **LR scheduler**: Cosine annealing (smooth convergence)
+- **Target performance**: Baseline 60-70%, Best methods 75-82%
 
 **Rationale**: 
 - Different datasets require different training regimes to reach similar **relative performance zones**
 - We want both datasets to show:
-  - Baseline that overfits (train-test gap exists)
+  - Baseline that has moderate overfitting (5-15% train-test gap)
   - Clear separation between regularization methods (10-15% accuracy range)
   - Room for λ to correlate with performance variation
-- MNIST is reduced from 5000→1000 training samples to prevent ceiling effects where all methods achieve 98-99%
-- CIFAR10 uses higher learning rate and more epochs to prevent floor effects where all methods fail to learn
+- **MNIST**: Reduced from 5000→1000 training samples to prevent ceiling effects where all methods achieve 98-99%
+- **CIFAR10**: Uses 10,000 samples (20% of dataset) with moderate LR (0.003) to balance learning vs overfitting
+  - Previous attempt with 5000 samples + LR=0.01 caused severe overfitting (100% train, 50% test)
+  - Current settings target 60-70% baseline test accuracy with visible but not catastrophic overfitting
 
 **Scientific validity**: We're not comparing MNIST vs CIFAR10 performance. We're asking:
 - "Within MNIST: Does λ correlate with generalization?"
